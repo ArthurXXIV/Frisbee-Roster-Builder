@@ -1,0 +1,321 @@
+import { DEFAULT_SETTINGS, O_SLOTS, ROLES, withIds, loadSampleRoster, normalizeRoster } from './roster.js';
+import { suggest, replacements, playerStats, flags, matchDLineO, parseSlots } from './optimizer.js';
+
+const KEY = 'roster-builder-v1';
+const $ = sel => document.querySelector(sel);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const first = n => n.split(' ')[0];
+const initials = n => n.split(/\s+/).map(w => w[0]).join('').slice(0, 2).toUpperCase();
+const hue = n => [...n].reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 360, 7);
+
+const newGame = (prev = {}) => ({
+  opponent: '', gameTo: prev.gameTo || 13, weStart: prev.weStart || 'O', bigGame: false,
+  us: 0, them: 0, points: [], current: null, options: null,
+});
+
+let S;
+try { S = JSON.parse(localStorage.getItem(KEY)); } catch { S = null; }
+if (!S) S = { roster: [], settings: { ...DEFAULT_SETTINGS }, game: newGame() };
+S.settings = { ...DEFAULT_SETTINGS, ...S.settings };
+let tab = 'game';
+
+const save = () => { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch {} };
+const byId = () => Object.fromEntries(S.roster.map(p => [p.id, p]));
+const name = id => byId()[id]?.name ?? '—';
+
+// ---------- game logic ----------
+const halfAt = g => Math.ceil(g.gameTo / 2);
+const halftimeHappened = g => g.points.some(p => p.halftimeAfter);
+const gameOver = g => g.us >= g.gameTo || g.them >= g.gameTo;
+
+function nextMode(g) {
+  if (!g.points.length) return g.weStart;
+  const last = g.points.at(-1);
+  if (last.halftimeAfter) return g.weStart === 'O' ? 'D' : 'O';
+  return last.scoredBy === 'us' ? 'D' : 'O';
+}
+
+function context(g) {
+  const hi = Math.max(g.us, g.them);
+  return {
+    roster: S.roster, settings: S.settings, stats: playerStats(g.points), mode: nextMode(g),
+    margin: g.us - g.them, bigGame: g.bigGame,
+    halfPoint: !halftimeHappened(g) && hi === halfAt(g) - 1,
+    gamePoint: hi === g.gameTo - 1,
+  };
+}
+
+function refreshOptions() {
+  const g = S.game;
+  g.options = gameOver(g) ? [] : suggest(context(g));
+}
+
+function pick(i) {
+  const o = S.game.options[i];
+  S.game.current = { mode: o.mode, assign: o.assign.map(a => ({ slot: a.slot, id: a.id })), label: o.label, option: i + 1, injuries: [] };
+  save(); render();
+}
+
+function scored(by) {
+  const g = S.game, c = g.current;
+  if (!c) return;
+  if (by === 'us') g.us++; else g.them++;
+  const players = c.assign.map(a => a.id).filter(Boolean);
+  const pt = {
+    n: g.points.length + 1, mode: c.mode, players, assign: c.assign, label: c.label, option: c.option,
+    injuries: c.injuries, scoredBy: by, us: g.us, them: g.them, ts: new Date().toISOString(),
+  };
+  if (c.mode === 'D') pt.dlo = matchDLineO(players, byId());
+  if (!halftimeHappened(g) && Math.max(g.us, g.them) === halfAt(g)) pt.halftimeAfter = true;
+  g.points.push(pt);
+  g.current = null;
+  refreshOptions(); save(); render();
+}
+
+function undo() {
+  const g = S.game, pt = g.points.pop();
+  if (!pt) return;
+  if (pt.scoredBy === 'us') g.us--; else g.them--;
+  g.current = { mode: pt.mode, assign: pt.assign, label: pt.label, option: pt.option, injuries: pt.injuries || [] };
+  refreshOptions(); save(); render();
+}
+
+function swap(slotIdx, newId, injured) {
+  const c = S.game.current, old = c.assign[slotIdx].id;
+  if (injured && old) {
+    const p = byId()[old]; p.status = 'injured';
+    c.injuries.push({ out: old, in: newId, slot: c.assign[slotIdx].slot });
+  }
+  const other = c.assign.findIndex(a => a.id === newId);
+  if (other >= 0) c.assign[other].id = old; // swapping two on-field players
+  c.assign[slotIdx].id = newId;
+  if (!injured) c.option = 'edited';
+  save(); render();
+}
+
+// ---------- views ----------
+function scoreboard() {
+  const g = S.game, ctx = context(g), f = flags(ctx);
+  const tags = [];
+  if (gameOver(g)) tags.push(`<span class="tag">Final · ${g.us > g.them ? 'Win' : 'Loss'}</span>`);
+  else {
+    tags.push(`<span class="tag ${ctx.mode.toLowerCase()}">Next: ${ctx.mode === 'O' ? 'Offense' : 'Defense'}</span>`);
+    if (ctx.halfPoint) tags.push(`<span class="tag warn">Half point</span>`);
+    if (ctx.gamePoint) tags.push(`<span class="tag warn">Game point</span>`);
+    if (f.win) tags.push(`<span class="tag warn">Up ${ctx.margin}: O3 / rookies</span>`);
+    else if (f.rest) tags.push(`<span class="tag">Resting O</span>`);
+    if (f.lose) tags.push(`<span class="tag warn">Down ${-ctx.margin}: O3 / "?" OK</span>`);
+    if (g.bigGame) tags.push(`<span class="tag">Big game</span>`);
+  }
+  const pct = n => Math.min(100, 100 * n / g.gameTo) / 2;
+  $('#scoreboard').innerHTML = `<div class="score">
+    <div class="brand"><span>Roster Builder</span><span>Game to ${g.gameTo} · Point ${g.points.length + (gameOver(g) ? 0 : 1)}</span></div>
+    <div class="board">
+      <div class="team us"><span class="lbl">Us</span><span class="n">${g.us}</span></div>
+      <span class="dash">–</span>
+      <div class="team them right"><span class="lbl">${esc(g.opponent || 'Opponent')}</span><span class="n">${g.them}</span></div>
+    </div>
+    <div class="progress"><i class="pu" style="width:${pct(g.us)}%"></i><i class="pt" style="width:${pct(g.them)}%"></i></div>
+    <div class="chips">${tags.join('')}</div></div>`;
+}
+
+function slotRows(assign, dlo) {
+  return assign.map(a => `<div class="slot"><span class="badge" title="${esc(ROLES[a.slot] || a.slot)}">${a.slot}</span>${a.id
+      ? `<span class="who">${esc(name(a.id))}${a.fallback ? ' <span class="tag warn mini">HC fallback</span>' : ''}</span>`
+      : `<span class="who missing">No ${a.slot} available</span>`}</div>`).join('')
+    + (dlo ? `<div class="divider">If we get the turn</div>` +
+      O_SLOTS.map(s => `<div class="slot after"><span class="badge o">${s}</span><span class="who ${dlo[s] ? '' : 'missing'}">${dlo[s] ? esc(name(dlo[s])) : 'Gap'}</span></div>`).join('') : '');
+}
+
+function gameView() {
+  const g = S.game;
+  if (!g.options) refreshOptions();
+  let h = '';
+  if (gameOver(g)) {
+    h += `<div class="card empty"><span class="ico">${g.us > g.them ? '🏆' : '🥏'}</span><h3 style="justify-content:center">${g.us > g.them ? 'Win' : 'Loss'} · ${g.us}–${g.them}</h3><p class="sub">Points played, holds and breaks are on the Stats tab.</p>
+      <button class="primary" data-act="newgame">Start new game</button></div>`;
+  } else if (!g.current) {
+    const m = nextMode(g);
+    h += `<h2 class="title">Point ${g.points.length + 1}: pick a line</h2><p class="lede">You're on <b>${m === 'O' ? 'offense' : 'defense'}</b>. Option 1 is the recommended line.</p>`;
+    h += '<div class="opts">';
+    g.options.forEach((o, i) => {
+      h += `<div class="card ${i === 0 ? 'best' : ''} mode-${o.mode.toLowerCase()}"><h3><span>${esc(o.label)}</span> <span class="rank">${i === 0 ? '★ Best' : 'Option ' + (i + 1)}</span></h3>
+        <div class="slots">${slotRows(o.assign, o.dlo)}</div>
+        <button class="primary" data-act="pick" data-i="${i}">Send out this line</button></div>`;
+    });
+    h += '</div>';
+    if (!g.options.length) h += `<div class="card empty"><span class="ico">🙅</span>Not enough available players to field a line.<br>Check who's marked available on the Roster tab.</div>`;
+  } else {
+    const c = g.current, onIds = c.assign.map(a => a.id);
+    const ctx = context(g);
+    h += `<h2 class="title">On the field <span class="tag ${c.mode.toLowerCase()}">${c.mode === 'O' ? 'Offense' : 'Defense'}</span></h2><p class="lede">${esc(c.label)}. Tap a name to swap, or hit Injury to auto-sub.</p><div class="card mode-${c.mode.toLowerCase()}">`;
+    c.assign.forEach((a, i) => {
+      const opts = S.roster.filter(p => p.status === 'available' || p.id === a.id);
+      const elig = new Set(replacements(ctx, a.slot, []).map(e => e.id));
+      opts.sort((x, y) => (elig.has(y.id) - elig.has(x.id)) || x.name.localeCompare(y.name));
+      h += `<div class="field"><span class="badge" title="${esc(ROLES[a.slot] || a.slot)}">${a.slot}</span>
+        <select data-act="swap" data-i="${i}">${a.id ? '' : '<option value="">— empty —</option>'}${opts.map(p =>
+          `<option value="${p.id}" ${p.id === a.id ? 'selected' : ''}>${esc(p.name)}${elig.has(p.id) ? '' : ' (not listed for slot)'}${onIds.includes(p.id) && p.id !== a.id ? ' ↔' : ''}</option>`).join('')}</select>
+        ${a.id ? `<button class="inj" data-act="injure" data-i="${i}">Injury</button>` : '<span></span>'}</div>`;
+    });
+    h += `</div><div class="big"><button class="us" data-act="us">We scored<small>→ ${g.us + 1}–${g.them}</small></button><button class="them" data-act="them">They scored<small>→ ${g.us}–${g.them + 1}</small></button></div>
+      <div class="links"><button class="ghost" data-act="back">← Back to options</button>`;
+  }
+  if (g.points.length) h += `${g.current ? '' : '<div class="links">'}<button class="ghost" data-act="undo">↺ Undo last point</button></div>`;
+  else if (g.current) h += '</div>';
+  return h;
+}
+
+function rosterView() {
+  const fields = [['o', 'O slots'], ['o2', 'O2 slots'], ['o3', 'O3 slots'], ['dlo', 'D-Line O slots'], ['zone', 'Zone slots (? = last resort)'], ['notes', 'Notes']];
+  const avail = S.roster.filter(p => p.status === 'available').length;
+  let h = `<h2 class="title">Roster</h2><p class="lede"><b>${avail}</b> of ${S.roster.length} available. Tap a player to edit. Status changes apply from the next point.</p>`;
+  S.roster.forEach((p, i) => {
+    h += `<details class="player status-${p.status}"><summary><span class="avatar" style="--h:${hue(p.name)}">${esc(initials(p.name))}</span><span class="nm"><span>${esc(p.name)}${p.rookie ? ' <span class="tag mini">Rookie</span>' : ''}</span><small>${esc(p.o ? 'O: ' + p.o : p.o2 ? 'O2: ' + p.o2 : p.o3 ? 'O3: ' + p.o3 : 'D: ' + (p.dlo || '—'))}</small></span>
+      <select data-act="status" data-i="${i}" onclick="event.stopPropagation()">
+        ${['available', 'injured', 'unavailable'].map(s => `<option ${p.status === s ? 'selected' : ''}>${s}</option>`).join('')}</select></summary><div class="body">
+      <label class="f">Name<input type="text" data-act="field" data-i="${i}" data-k="name" value="${esc(p.name)}"></label>
+      ${fields.map(([k, l]) => `<label class="f">${l}<input type="text" data-act="field" data-i="${i}" data-k="${k}" value="${esc(p[k])}"></label>`).join('')}
+      <div class="grid2" style="margin-top:6px">
+        <label class="check"><input type="checkbox" data-act="rookie" data-i="${i}" ${p.rookie ? 'checked' : ''}> Rookie</label>
+        <label class="f">Crossover to D<select data-act="cross" data-i="${i}">
+          ${[[0, 'Never'], [1, 'Primary'], [2, 'Situational']].map(([v, l]) => `<option value="${v}" ${p.cross == v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+      </div>
+      <button class="danger" style="margin-top:8px" data-act="del" data-i="${i}">Remove player</button></div></details>`;
+  });
+  h += `<h2>Offensive roles</h2><div class="card slots legend">${O_SLOTS.map(s => `<div class="slot"><span class="badge o">${s}</span><span class="who">${esc(ROLES[s])}</span></div>`).join('')}</div>`;
+  h += `<h2>Manage</h2>`;
+  h += `<div class="row"><button data-act="add" class="primary" style="margin:0 0 4px">+ Add player</button>
+    <button data-act="exportRoster">Export JSON</button><button data-act="importRoster">Import JSON</button>
+    <button data-act="healAll">Mark all available</button><button class="danger" data-act="resetRoster">Reset to sheet</button></div>`;
+  return h;
+}
+
+function statsView() {
+  const g = S.game, st = playerStats(g.points);
+  const oPts = g.points.filter(p => p.mode === 'O'), dPts = g.points.filter(p => p.mode === 'D');
+  const holds = oPts.filter(p => p.scoredBy === 'us').length, breaks = dPts.filter(p => p.scoredBy === 'us').length;
+  const pc = (a, b) => b ? Math.round(100 * a / b) : 0;
+  const tile = (cls, k, v, of) => `<div class="tile ${cls}"><div class="k">${k}</div><div class="v">${v}<small> / ${of}</small></div><div class="bar"><i style="width:${pc(v, of)}%"></i></div><div class="sub" style="margin-top:6px">${pc(v, of)}% ${cls === 'ot' ? 'hold' : 'break'} rate</div></div>`;
+  let h = `<h2 class="title">Stats</h2><p class="lede">${g.points.length ? `${g.points.length} points played${g.opponent ? ' vs ' + esc(g.opponent) : ''}.` : 'Nothing yet. Stats fill in as you log points.'}</p>
+    <div class="tiles">${tile('ot', 'O holds', holds, oPts.length)}${tile('dt', 'D breaks', breaks, dPts.length)}</div>
+    <h2>Points played</h2><div class="card table-card"><table><tr><th>Player</th><th class="n">O</th><th class="n">D</th><th class="n">Total</th><th class="n">+/−</th></tr>`;
+  S.roster.map(p => {
+    const mine = g.points.filter(pt => pt.players.includes(p.id));
+    return { p, o: mine.filter(x => x.mode === 'O').length, d: mine.filter(x => x.mode === 'D').length,
+      pm: mine.filter(x => x.scoredBy === 'us').length - mine.filter(x => x.scoredBy === 'them').length };
+  }).sort((a, b) => (b.o + b.d) - (a.o + a.d)).forEach(r => {
+    h += `<tr><td>${esc(r.p.name)}</td><td class="n">${r.o}</td><td class="n">${r.d}</td><td class="n tot">${st.total[r.p.id] || 0}</td><td class="n ${r.pm > 0 ? 'pos' : r.pm < 0 ? 'neg' : ''}">${r.pm > 0 ? '+' : ''}${r.pm}</td></tr>`;
+  });
+  h += `</table></div><h2>Point log</h2><div class="card table-card"><table><tr><th>#</th><th>Line</th><th>Pick</th><th class="n">Score</th></tr>`;
+  if (!g.points.length) h += `<tr><td colspan="4" class="empty">No points logged yet</td></tr>`;
+  g.points.forEach(p => { h += `<tr><td>${p.n}</td><td><span class="tag mini ${p.mode.toLowerCase()}">${p.mode}</span> ${esc(p.label)}</td><td>${p.option}</td><td class="n">${p.us}–${p.them}${p.halftimeAfter ? ' (half)' : ''}</td></tr>`; });
+  h += `</table></div><div class="row"><button data-act="csv">Export points CSV</button><button data-act="json">Export game JSON</button></div>`;
+  return h;
+}
+
+function settingsView() {
+  const g = S.game, s = S.settings;
+  const num = (k, l) => `<label class="f">${l}<input type="number" data-act="setting" data-k="${k}" value="${s[k]}" step="${k === 'fatigueWeight' ? 0.5 : 1}"></label>`;
+  return `<h2 class="title">Settings</h2><h2>Game</h2><div class="card">
+    <label class="f">Opponent<input type="text" data-act="game" data-k="opponent" value="${esc(g.opponent)}"></label>
+    <div class="grid2">
+      <label class="f">Game to<select data-act="game" data-k="gameTo">${[11, 13, 15].map(n => `<option ${g.gameTo == n ? 'selected' : ''}>${n}</option>`).join('')}</select></label>
+      <label class="f">We start on<select data-act="game" data-k="weStart"><option value="O" ${g.weStart === 'O' ? 'selected' : ''}>Offense (they pull)</option><option value="D" ${g.weStart === 'D' ? 'selected' : ''}>Defense (we pull)</option></select></label>
+    </div>
+    <label class="check"><input type="checkbox" data-act="big" ${g.bigGame ? 'checked' : ''}> Big game (allow crossovers every D point)</label>
+    <p class="sub">Halftime at ${halfAt(g)}. The other team pulls to start the second half.</p>
+    <button class="danger" style="width:100%;margin-top:6px" data-act="newgame">New game (clears score & log)</button></div>
+  <h2>Line rules</h2><div class="card grid2">
+    ${num('restMargin', 'Rest O when up by')}${num('blowoutUp', 'O3 + rookies when up by')}
+    ${num('blowoutDown', 'O3 / "?" when down by')}${num('maxConsecutive', 'Max points in a row')}
+    ${num('fatigueWeight', 'Fatigue weight')}</div>
+  <p class="sub" style="margin:0 4px">Data is saved in this browser only. Use Export on the Roster/Stats tabs to back up.</p>`;
+}
+
+function render() {
+  scoreboard();
+  $('#view').innerHTML = { game: gameView, roster: rosterView, stats: statsView, settings: settingsView }[tab]();
+  document.querySelectorAll('.tabs button').forEach(b => b.classList.toggle('active', b.dataset.tab === tab));
+}
+
+function download(filename, text, type = 'application/json') {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([text], { type }));
+  a.download = filename; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
+function rosterChanged() { S.game.options = null; if (!S.game.current) refreshOptions(); save(); }
+
+// ---------- events ----------
+document.querySelector('.tabs').addEventListener('click', e => {
+  const t = e.target.closest('button')?.dataset.tab;
+  if (t) { tab = t; render(); window.scrollTo(0, 0); }
+});
+
+$('#view').addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return;
+  const i = +b.dataset.i, g = S.game;
+  switch (b.dataset.act) {
+    case 'pick': return pick(i);
+    case 'us': return scored('us');
+    case 'them': return scored('them');
+    case 'undo': return confirm('Undo the last point?') && undo();
+    case 'back': g.current = null; save(); return render();
+    case 'injure': {
+      const a = g.current.assign[i], ctx = context(g);
+      ctx.roster = S.roster.map(p => p.id === a.id ? { ...p, status: 'injured' } : p);
+      const rep = replacements(ctx, a.slot, g.current.assign.map(x => x.id))[0];
+      if (!rep) return alert(`No eligible ${a.slot} available. Pick someone from the dropdown.`);
+      if (confirm(`${name(a.id)} injured. Sub in ${name(rep.id)} at ${a.slot}?`)) swap(i, rep.id, true);
+      return;
+    }
+    case 'newgame':
+      if (g.points.length && !confirm('Start a new game? Export stats first if you need them.')) return;
+      S.game = newGame(g); S.roster.forEach(p => { if (p.status === 'injured') p.status = 'available'; });
+      refreshOptions(); save(); tab = 'game'; return render();
+    case 'add': S.roster.push({ ...withIds([{ name: 'New Player' }])[0], id: 'p' + Date.now(), o: '', o2: '', o3: '', dlo: '', zone: '', rookie: false, cross: 0, status: 'available', notes: '' }); rosterChanged(); return render();
+    case 'del': if (confirm(`Remove ${S.roster[i].name}?`)) { S.roster.splice(i, 1); rosterChanged(); render(); } return;
+    case 'healAll': S.roster.forEach(p => p.status = 'available'); rosterChanged(); return render();
+    case 'resetRoster': if (confirm('Replace roster with the sample roster?')) loadSampleRoster().then(r => { S.roster = r; rosterChanged(); render(); }).catch(err => alert(err.message)); return;
+    case 'exportRoster': return download('roster.json', JSON.stringify(S.roster, null, 2));
+    case 'importRoster': {
+      const inp = document.createElement('input'); inp.type = 'file'; inp.accept = '.json,application/json';
+      inp.onchange = async () => {
+        try { const { roster, warnings } = normalizeRoster(JSON.parse(await inp.files[0].text())); S.roster = roster; rosterChanged(); render(); if (warnings.length) alert(warnings.join('\n')); }
+        catch { alert('That file is not a roster JSON export.'); }
+      };
+      return inp.click();
+    }
+    case 'json': return download(`game-${g.opponent || 'unnamed'}.json`, JSON.stringify({ game: g, roster: S.roster }, null, 2));
+    case 'csv': {
+      const rows = [['point', 'mode', 'label', 'option', 'scored_by', 'us', 'them', ...g.points[0]?.assign.map((_, k) => `player${k + 1}`) ?? []]];
+      g.points.forEach(p => rows.push([p.n, p.mode, p.label, p.option, p.scoredBy, p.us, p.them, ...p.assign.map(a => `${a.slot}:${name(a.id)}`)]));
+      return download('points.csv', rows.map(r => r.map(x => `"${String(x).replace(/"/g, '""')}"`).join(',')).join('\n'), 'text/csv');
+    }
+  }
+});
+
+$('#view').addEventListener('change', e => {
+  const t = e.target, i = +t.dataset.i;
+  switch (t.dataset.act) {
+    case 'swap': return t.value && swap(i, t.value, false);
+    case 'status': S.roster[i].status = t.value; rosterChanged(); return render();
+    case 'field': S.roster[i][t.dataset.k] = t.value; return rosterChanged();
+    case 'rookie': S.roster[i].rookie = t.checked; return rosterChanged();
+    case 'cross': S.roster[i].cross = +t.value; return rosterChanged();
+    case 'setting': S.settings[t.dataset.k] = +t.value; return rosterChanged();
+    case 'game': S.game[t.dataset.k] = t.dataset.k === 'gameTo' ? +t.value : t.value; rosterChanged(); return render();
+    case 'big': S.game.bigGame = t.checked; rosterChanged(); return render();
+  }
+});
+
+async function boot() {
+  if (!S.roster?.length) {
+    try { S.roster = await loadSampleRoster(); save(); }
+    catch (err) { console.error(err); }
+  }
+  S.game.options = null; refreshOptions(); render();
+}
+boot();
