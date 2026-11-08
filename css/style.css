@@ -201,3 +201,63 @@ td.tot { font-weight: 800; }
 @media (min-width: 1100px) {
   .tiles { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 }
+
+/* ---------- in-app dialog ---------- */
+.sheet-wrap { position: fixed; inset: 0; z-index: 50; background: rgba(2,6,23,.55); backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px); display: flex; align-items: flex-end; justify-content: center; padding: 16px 16px calc(16px + env(safe-area-inset-bottom)); animation: dim .16s ease; }
+.sheet { width: 100%; max-width: 420px; background: var(--card); border: 1px solid var(--line); border-radius: 24px; padding: 22px 20px 16px; box-shadow: 0 24px 60px rgba(0,0,0,.35); animation: rise .2s cubic-bezier(.2,.9,.3,1.2); }
+.sheet h3 { margin: 0 0 6px; font-size: 1.15rem; letter-spacing: -.01em; }
+.sheet p { margin: 0; color: var(--muted); font-size: .92rem; max-height: 40vh; overflow: auto; }
+.sheet-btns { display: grid; grid-auto-flow: column; grid-auto-columns: 1fr; gap: 10px; margin-top: 20px; }
+.sheet-btns button { padding: 14px; border-radius: 14px; }
+.sheet-btns .go { background: var(--accent); color: #fff; border-color: transparent; }
+.sheet-btns .danger-solid { background: var(--them); color: #fff; border-color: transparent; }
+.sheet-wrap.out { animation: dim .16s ease reverse forwards; }
+@media (min-width: 760px) { .sheet-wrap { align-items: center; } }
+@keyframes dim { from { opacity: 0; } }
+@keyframes rise { from { transform: translateY(24px); opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .sheet-wrap, .sheet { animation: none; } }
+
+/* ---------- compact phone layout ---------- */
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
+@media (max-width: 759px) {
+  body { font-size: 15px; padding-bottom: calc(64px + env(safe-area-inset-bottom)); }
+  main { padding: 4px 12px 16px; }
+  .topbar { padding: calc(6px + env(safe-area-inset-top)) 14px 8px; }
+  .score .brand { font-size: .62rem; }
+  .score .board { margin: 2px 0 6px; }
+  .score .team { flex-direction: row; align-items: baseline; gap: 8px; }
+  .score .team.right { flex-direction: row-reverse; }
+  .score .team .n { font-size: 1.9rem; }
+  .score .team .lbl { font-size: .7rem; }
+  .score .dash { font-size: 1.1rem; padding: 0 6px; }
+  .chips { margin-top: 6px; } .chips .tag { font-size: .66rem; padding: 2px 8px; }
+  h2.title { font-size: 1.1rem; margin: 12px 2px 2px; }
+  .lede { font-size: .8rem; margin: 0 2px 8px; }
+  h2 { margin: 16px 2px 8px; }
+  .card { padding: 12px; margin: 8px 0; border-radius: 14px; }
+  .card h3 { font-size: .95rem; margin-bottom: 6px; }
+  .rank { font-size: .62rem; padding: 2px 8px; }
+  .slots { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 10px; }
+  .slots .divider { grid-column: 1 / -1; margin: 6px 0 2px; padding-top: 8px; font-size: .62rem; }
+  .slot { min-height: 30px; padding: 2px 0; gap: 8px; }
+  .slot .who { font-size: .86rem; display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .badge { width: 40px; height: 24px; font-size: .64rem; border-radius: 7px; }
+  .slots .after { min-height: 26px; }
+  .slots .after .badge { height: 20px; }
+  .legend.slots { grid-template-columns: 1fr; }
+  .legend .who { white-space: normal; font-size: .8rem; }
+  button { padding: 9px 14px; }
+  button.primary { margin-top: 10px; padding: 11px; font-size: .92rem; }
+  .big { gap: 10px; margin: 12px 0 6px; }
+  .big button { padding: 16px 8px 13px; font-size: 1rem; border-radius: 16px; }
+  .field { grid-template-columns: 40px 1fr auto; gap: 8px; padding: 6px 0; }
+  select, input[type=text], input[type=number] { padding: 8px 10px; border-radius: 10px; }
+  .inj { padding: 7px 9px; }
+  details.player summary { padding: 8px 10px; gap: 10px; }
+  .avatar { width: 32px; height: 32px; font-size: .72rem; }
+  .tile { padding: 12px; } .tile .v { font-size: 1.6rem; }
+  th, td { padding: 8px 10px; }
+  .tabs { padding: 4px 8px calc(4px + env(safe-area-inset-bottom)); }
+  .tabs button { padding: 4px 0; font-size: .64rem; gap: 2px; }
+  .tabs button svg { width: 21px; height: 21px; }
+}

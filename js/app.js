@@ -246,6 +246,24 @@ function download(filename, text, type = 'application/json') {
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
 
+// ---------- in-app dialog (replaces native confirm/alert) ----------
+function ask(title, body = '', { ok = 'OK', cancel = 'Cancel', danger = false } = {}) {
+  return new Promise(resolve => {
+    const el = document.createElement('div');
+    el.className = 'sheet-wrap';
+    el.innerHTML = `<div class="sheet" role="alertdialog" aria-modal="true" aria-labelledby="dlg-t">
+      <h3 id="dlg-t">${esc(title)}</h3>${body ? `<p>${esc(body).replace(/\n/g, '<br>')}</p>` : ''}
+      <div class="sheet-btns">${cancel ? `<button data-r="0">${esc(cancel)}</button>` : ''}<button data-r="1" class="${danger ? 'danger-solid' : 'go'}">${esc(ok)}</button></div></div>`;
+    const done = r => { el.classList.add('out'); setTimeout(() => el.remove(), 160); document.removeEventListener('keydown', key); resolve(r); };
+    const key = e => { if (e.key === 'Escape') done(false); if (e.key === 'Enter') done(true); };
+    el.addEventListener('click', e => { const b = e.target.closest('[data-r]'); if (b) done(b.dataset.r === '1'); else if (e.target === el) done(false); });
+    document.addEventListener('keydown', key);
+    document.body.appendChild(el);
+    el.querySelector('[data-r="1"]').focus();
+  });
+}
+const tell = (title, body) => ask(title, body, { cancel: '', ok: 'Got it' });
+
 function rosterChanged() { S.game.options = null; if (!S.game.current) refreshOptions(); save(); }
 
 // ---------- events ----------
@@ -254,37 +272,37 @@ document.querySelector('.tabs').addEventListener('click', e => {
   if (t) { tab = t; render(); window.scrollTo(0, 0); }
 });
 
-$('#view').addEventListener('click', e => {
+$('#view').addEventListener('click', async e => {
   const b = e.target.closest('button'); if (!b) return;
   const i = +b.dataset.i, g = S.game;
   switch (b.dataset.act) {
     case 'pick': return pick(i);
     case 'us': return scored('us');
     case 'them': return scored('them');
-    case 'undo': return confirm('Undo the last point?') && undo();
+    case 'undo': return (await ask('Undo the last point?', `Score goes back to ${g.points.at(-1)?.scoredBy === 'us' ? g.us - 1 : g.us}–${g.points.at(-1)?.scoredBy === 'them' ? g.them - 1 : g.them} and that line returns to the field.`, { ok: 'Undo point' })) && undo();
     case 'back': g.current = null; save(); return render();
     case 'injure': {
       const a = g.current.assign[i], ctx = context(g);
       ctx.roster = S.roster.map(p => p.id === a.id ? { ...p, status: 'injured' } : p);
       const rep = replacements(ctx, a.slot, g.current.assign.map(x => x.id))[0];
-      if (!rep) return alert(`No eligible ${a.slot} available. Pick someone from the dropdown.`);
-      if (confirm(`${name(a.id)} injured. Sub in ${name(rep.id)} at ${a.slot}?`)) swap(i, rep.id, true);
+      if (!rep) return tell(`No ${a.slot} available`, 'Pick a replacement from the dropdown instead.');
+      if (await ask(`Sub out ${name(a.id)}?`, `${name(rep.id)} comes in at ${a.slot}. ${first(name(a.id))} is marked injured.`, { ok: `Sub in ${first(name(rep.id))}` })) swap(i, rep.id, true);
       return;
     }
     case 'newgame':
-      if (g.points.length && !confirm('Start a new game? Export stats first if you need them.')) return;
+      if (g.points.length && !(await ask('Start a new game?', 'The score and point log will be cleared. Export stats first if you need them.', { ok: 'New game', danger: true }))) return;
       S.game = newGame(g); S.roster.forEach(p => { if (p.status === 'injured') p.status = 'available'; });
       refreshOptions(); save(); tab = 'game'; return render();
     case 'add': S.roster.push({ ...withIds([{ name: 'New Player' }])[0], id: 'p' + Date.now(), o: '', o2: '', o3: '', dlo: '', zone: '', rookie: false, cross: 0, status: 'available', notes: '' }); rosterChanged(); return render();
-    case 'del': if (confirm(`Remove ${S.roster[i].name}?`)) { S.roster.splice(i, 1); rosterChanged(); render(); } return;
+    case 'del': if (await ask(`Remove ${S.roster[i].name}?`, 'They will be taken off the roster.', { ok: 'Remove', danger: true })) { S.roster.splice(i, 1); rosterChanged(); render(); } return;
     case 'healAll': S.roster.forEach(p => p.status = 'available'); rosterChanged(); return render();
-    case 'resetRoster': if (confirm('Replace roster with the sample roster?')) loadSampleRoster().then(r => { S.roster = r; rosterChanged(); render(); }).catch(err => alert(err.message)); return;
+    case 'resetRoster': if (await ask('Replace the roster?', 'Your current players will be replaced with the sample roster.', { ok: 'Replace', danger: true })) loadSampleRoster().then(r => { S.roster = r; rosterChanged(); render(); }).catch(err => tell('Could not load roster', err.message)); return;
     case 'exportRoster': return download('roster.json', JSON.stringify(S.roster, null, 2));
     case 'importRoster': {
       const inp = document.createElement('input'); inp.type = 'file'; inp.accept = '.json,application/json';
       inp.onchange = async () => {
-        try { const { roster, warnings } = normalizeRoster(JSON.parse(await inp.files[0].text())); S.roster = roster; rosterChanged(); render(); if (warnings.length) alert(warnings.join('\n')); }
-        catch { alert('That file is not a roster JSON export.'); }
+        try { const { roster, warnings } = normalizeRoster(JSON.parse(await inp.files[0].text())); S.roster = roster; rosterChanged(); render(); if (warnings.length) tell('Imported with notes', warnings.join('\n')); }
+        catch { tell('Could not import', 'That file is not a roster JSON export.'); }
       };
       return inp.click();
     }
