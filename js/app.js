@@ -53,7 +53,7 @@ function refreshOptions() {
 function pick(i) {
   const o = S.game.options[i];
   S.game.current = { mode: o.mode, assign: o.assign.map(a => ({ slot: a.slot, id: a.id })), label: o.label, option: i + 1, injuries: [] };
-  save(); render();
+  save(); render(); toTop();
 }
 
 function scored(by) {
@@ -69,7 +69,7 @@ function scored(by) {
   if (!halftimeHappened(g) && Math.max(g.us, g.them) === halfAt(g)) pt.halftimeAfter = true;
   g.points.push(pt);
   g.current = null;
-  refreshOptions(); save(); render();
+  refreshOptions(); save(); render(); toTop();
 }
 
 function undo() {
@@ -246,6 +246,11 @@ function download(filename, text, type = 'application/json') {
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
 
+function toTop() { window.scrollTo({ top: 0, behavior: 'smooth' }); }
+const buzz = () => { try { navigator.vibrate?.(12); } catch {} };
+window.addEventListener('error', e => tell('Something went wrong', String(e.message || e.error)));
+window.addEventListener('unhandledrejection', e => tell('Something went wrong', String(e.reason?.message || e.reason)));
+
 // ---------- in-app dialog (replaces native confirm/alert) ----------
 function ask(title, body = '', { ok = 'OK', cancel = 'Cancel', danger = false } = {}) {
   return new Promise(resolve => {
@@ -274,6 +279,7 @@ document.querySelector('.tabs').addEventListener('click', e => {
 
 $('#view').addEventListener('click', async e => {
   const b = e.target.closest('button'); if (!b) return;
+  buzz();
   const i = +b.dataset.i, g = S.game;
   switch (b.dataset.act) {
     case 'pick': return pick(i);
