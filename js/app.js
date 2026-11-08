@@ -281,16 +281,19 @@ function menu(anchor, items, current) {
 const O_TIERS = [['o', 'O'], ['o2', 'O2'], ['o3', 'O3'], ['dlo', 'D']];
 const PD_FOR = { HD: ['best', 'handler'], CD: ['best', 'cutter'] };
 
-function subGroups(slot, mode, currentId, onIds) {
-  const avail = S.roster.filter(p => p.id !== currentId && (p.status === 'available' || onIds.includes(p.id)));
+function subGroups(slot, mode, currentId, onIds, assign = []) {
+  // Teammates already playing this same slot (e.g. the other Wall) are left out: swapping them changes nothing.
+  const sameSlot = new Set(assign.filter(x => x.slot === slot).map(x => x.id));
+  const avail = S.roster.filter(p => p.id !== currentId && !sameSlot.has(p.id) && (p.status === 'available' || onIds.includes(p.id)));
   const seen = new Set(), groups = [];
   const add = (title, list) => { list = list.filter(x => !seen.has(x.p.id)); list.forEach(x => seen.add(x.p.id)); if (list.length) groups.push({ title, list }); };
-  const sortLR = l => l.sort((a, b) => a.lr - b.lr || a.p.name.localeCompare(b.p.name));
+  const onF = x => onIds.includes(x.p.id);
+  const sortLR = l => l.sort((a, b) => onF(a) - onF(b) || a.lr - b.lr || a.p.name.localeCompare(b.p.name));
   if (O_SLOTS.includes(slot)) {
     for (const [k, t] of O_TIERS) add(t === 'D' ? 'D-Line O (off the D line)' : `${t} line`,
       sortLR(avail.map(p => ({ p, lr: parseSlots(p[k])[slot] })).filter(x => x.lr !== undefined).map(x => ({ ...x, tag: `${t} ${slot}${x.lr ? '?' : ''}`, off: t === 'D' }))));
   } else if (PD_FOR[slot]) {
-    add(`Person D ${slot}`, avail.filter(p => PD_FOR[slot].includes(p.pd)).map(p => ({ p, tag: p.pd })).sort((a, b) => a.p.name.localeCompare(b.p.name)));
+    add(`Person D ${slot}`, sortLR(avail.filter(p => PD_FOR[slot].includes(p.pd)).map(p => ({ p, lr: false, tag: p.pd }))));
   } else {
     add(`Zone ${slot}`, sortLR(avail.map(p => ({ p, lr: parseSlots(p.zone)[slot] })).filter(x => x.lr !== undefined).map(x => ({ ...x, tag: `${slot}${x.lr ? '? last resort' : ''}` }))));
   }
@@ -298,11 +301,12 @@ function subGroups(slot, mode, currentId, onIds) {
   return { groups, rest };
 }
 
-function subSheet(slot, mode, currentId, onIds) {
+function subSheet(slot, mode, currentId, onIds, assign) {
   return new Promise(resolve => {
-    const { groups, rest } = subGroups(slot, mode, currentId, onIds);
+    const { groups, rest } = subGroups(slot, mode, currentId, onIds, assign);
+    const slotOf = id => assign.find(x => x.id === id)?.slot;
     const row = x => `<button class="sub-row ${x.off ? 'off' : ''}" data-v="${x.p.id}"><span class="avatar" style="--h:${hue(x.p.name)}">${esc(initials(x.p.name))}</span>
-      <span class="sub-nm">${esc(x.p.name)}${onIds.includes(x.p.id) ? '<small>On field: swap spots</small>' : ''}</span><span class="tag mini ${x.off ? 'd' : 'o'}">${esc(x.tag)}</span></button>`;
+      <span class="sub-nm">${esc(x.p.name)}${onIds.includes(x.p.id) ? `<small>On field at ${esc(slotOf(x.p.id))}: swap spots</small>` : ''}</span><span class="tag mini ${x.off ? 'd' : 'o'}">${esc(x.tag)}</span></button>`;
     const el = document.createElement('div');
     el.className = 'sheet-wrap';
     el.innerHTML = `<div class="sheet sub-sheet" role="dialog" aria-modal="true" aria-label="Substitute ${slot}">
@@ -352,7 +356,7 @@ $('#view').addEventListener('click', async e => {
   switch (b.dataset.act) {
     case 'subMenu': {
       const c = g.current, a = c.assign[i];
-      const v = await subSheet(a.slot, c.mode, a.id, c.assign.map(x => x.id).filter(Boolean));
+      const v = await subSheet(a.slot, c.mode, a.id, c.assign.map(x => x.id).filter(Boolean), c.assign);
       if (v) swap(i, v, false);
       return;
     }
