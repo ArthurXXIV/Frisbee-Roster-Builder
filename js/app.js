@@ -154,12 +154,8 @@ function gameView() {
     const ctx = context(g);
     h += `<h2 class="title">On the field <span class="tag ${c.mode.toLowerCase()}">${c.mode === 'O' ? 'Offense' : 'Defense'}</span></h2><p class="lede">${esc(c.label)}. Tap a name to swap, or hit Injury to auto-sub.</p><div class="card mode-${c.mode.toLowerCase()}">`;
     c.assign.forEach((a, i) => {
-      const opts = S.roster.filter(p => p.status === 'available' || p.id === a.id);
-      const elig = new Set(replacements(ctx, a.slot, []).map(e => e.id));
-      opts.sort((x, y) => (elig.has(y.id) - elig.has(x.id)) || x.name.localeCompare(y.name));
       h += `<div class="field"><span class="badge" title="${esc(ROLES[a.slot] || a.slot)}">${a.slot}</span>
-        <select data-act="swap" data-i="${i}">${a.id ? '' : '<option value="">— empty —</option>'}${opts.map(p =>
-          `<option value="${p.id}" ${p.id === a.id ? 'selected' : ''}>${esc(p.name)}${elig.has(p.id) ? '' : ' (not listed for slot)'}${onIds.includes(p.id) && p.id !== a.id ? ' ↔' : ''}</option>`).join('')}</select>
+        <button class="picker ${a.id ? '' : 'empty'}" data-act="subMenu" data-i="${i}" aria-haspopup="dialog"><span>${a.id ? esc(name(a.id)) : 'Empty: tap to fill'}</span><svg viewBox="0 0 12 8" aria-hidden="true"><path d="M1 1l5 5 5-5"/></svg></button>
         ${a.id ? `<button class="inj" data-act="injure" data-i="${i}">Injury</button>` : '<span></span>'}</div>`;
     });
     h += `</div><div class="big"><button class="us" data-act="us">We scored<small>→ ${g.us + 1}–${g.them}</small></button><button class="them" data-act="them">They scored<small>→ ${g.us}–${g.them + 1}</small></button></div>
@@ -281,6 +277,48 @@ function menu(anchor, items, current) {
   });
 }
 
+// ---------- substitution picker: only players listed for the slot, by group ----------
+const O_TIERS = [['o', 'O'], ['o2', 'O2'], ['o3', 'O3'], ['dlo', 'D']];
+const PD_FOR = { HD: ['best', 'handler'], CD: ['best', 'cutter'] };
+
+function subGroups(slot, mode, currentId, onIds) {
+  const avail = S.roster.filter(p => p.id !== currentId && (p.status === 'available' || onIds.includes(p.id)));
+  const seen = new Set(), groups = [];
+  const add = (title, list) => { list = list.filter(x => !seen.has(x.p.id)); list.forEach(x => seen.add(x.p.id)); if (list.length) groups.push({ title, list }); };
+  const sortLR = l => l.sort((a, b) => a.lr - b.lr || a.p.name.localeCompare(b.p.name));
+  if (O_SLOTS.includes(slot)) {
+    for (const [k, t] of O_TIERS) add(t === 'D' ? 'D-Line O (off the D line)' : `${t} line`,
+      sortLR(avail.map(p => ({ p, lr: parseSlots(p[k])[slot] })).filter(x => x.lr !== undefined).map(x => ({ ...x, tag: `${t} ${slot}${x.lr ? '?' : ''}`, off: t === 'D' }))));
+  } else if (PD_FOR[slot]) {
+    add(`Person D ${slot}`, avail.filter(p => PD_FOR[slot].includes(p.pd)).map(p => ({ p, tag: p.pd })).sort((a, b) => a.p.name.localeCompare(b.p.name)));
+  } else {
+    add(`Zone ${slot}`, sortLR(avail.map(p => ({ p, lr: parseSlots(p.zone)[slot] })).filter(x => x.lr !== undefined).map(x => ({ ...x, tag: `${slot}${x.lr ? '? last resort' : ''}` }))));
+  }
+  const rest = avail.filter(p => !seen.has(p.id)).map(p => ({ p, tag: 'not listed', off: true })).sort((a, b) => a.p.name.localeCompare(b.p.name));
+  return { groups, rest };
+}
+
+function subSheet(slot, mode, currentId, onIds) {
+  return new Promise(resolve => {
+    const { groups, rest } = subGroups(slot, mode, currentId, onIds);
+    const row = x => `<button class="sub-row ${x.off ? 'off' : ''}" data-v="${x.p.id}"><span class="avatar" style="--h:${hue(x.p.name)}">${esc(initials(x.p.name))}</span>
+      <span class="sub-nm">${esc(x.p.name)}${onIds.includes(x.p.id) ? '<small>On field: swap spots</small>' : ''}</span><span class="tag mini ${x.off ? 'd' : 'o'}">${esc(x.tag)}</span></button>`;
+    const el = document.createElement('div');
+    el.className = 'sheet-wrap';
+    el.innerHTML = `<div class="sheet sub-sheet" role="dialog" aria-modal="true" aria-label="Substitute ${slot}">
+      <div class="grab"></div><h3>Sub in at <span class="badge">${slot}</span></h3>
+      <p>${currentId ? `Replacing ${esc(name(currentId))}. ` : ''}${esc(ROLES[slot] || '')}</p>
+      <div class="sub-list">${groups.map(g => `<div class="sub-h">${esc(g.title)}</div>${g.list.map(row).join('')}`).join('') || '<div class="sub-h">Nobody is listed for this slot</div>'}
+      ${rest.length ? `<details class="more"><summary>Everyone else (${rest.length})</summary>${rest.map(row).join('')}</details>` : ''}</div>
+      <div class="sheet-btns"><button data-v="">Cancel</button></div></div>`;
+    const done = v => { el.classList.add('out'); setTimeout(() => el.remove(), 160); removeEventListener('keydown', key); resolve(v || null); };
+    const key = e => e.key === 'Escape' && done(null);
+    el.addEventListener('click', e => { const b = e.target.closest('[data-v]'); if (b) done(b.dataset.v); else if (e.target === el) done(null); });
+    addEventListener('keydown', key);
+    document.body.appendChild(el);
+  });
+}
+
 // ---------- in-app dialog (replaces native confirm/alert) ----------
 function ask(title, body = '', { ok = 'OK', cancel = 'Cancel', danger = false } = {}) {
   return new Promise(resolve => {
@@ -312,6 +350,12 @@ $('#view').addEventListener('click', async e => {
   buzz();
   const i = +b.dataset.i, g = S.game;
   switch (b.dataset.act) {
+    case 'subMenu': {
+      const c = g.current, a = c.assign[i];
+      const v = await subSheet(a.slot, c.mode, a.id, c.assign.map(x => x.id).filter(Boolean));
+      if (v) swap(i, v, false);
+      return;
+    }
     case 'select': if (sel !== i) { sel = i; render(); } return;
     case 'statusMenu': {
       e.preventDefault(); // don't toggle the <details>
