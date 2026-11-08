@@ -332,3 +332,47 @@ select, input[type=text], input[type=number], label.check { background-color: va
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
   .card, .tile, details.player, .sheet, .tabs { background: var(--card); }
 }
+
+/* ---------- status pill + glass menu ---------- */
+.pill { display: inline-flex; align-items: center; gap: 7px; padding: 6px 10px 6px 11px; border-radius: 999px; font-size: .78rem; font-weight: 700;
+  background: var(--glass-strong); border: 1px solid var(--glass-line); box-shadow: inset 0 1px 0 var(--glass-edge); color: var(--text); flex: none; }
+.pill svg { width: 10px; height: 7px; fill: none; stroke: currentColor; stroke-width: 2; opacity: .6; }
+.pill i, .menu i { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: none; }
+.st-available i { background: var(--us); box-shadow: 0 0 0 3px color-mix(in srgb, var(--us) 25%, transparent); }
+.st-injured i { background: var(--them); box-shadow: 0 0 0 3px color-mix(in srgb, var(--them) 25%, transparent); }
+.st-unavailable i { background: var(--muted); }
+.pill.st-available { color: var(--us-ink); } .pill.st-injured { color: var(--them-ink); } .pill.st-unavailable { color: var(--muted); }
+
+.menu-wrap { position: fixed; inset: 0; z-index: 40; }
+.menu { position: fixed; min-width: 170px; padding: 6px; border-radius: 18px; display: flex; flex-direction: column; gap: 2px;
+  background: var(--glass-strong); border: 1px solid var(--glass-line); backdrop-filter: var(--blur); -webkit-backdrop-filter: var(--blur);
+  box-shadow: inset 0 1px 0 var(--glass-edge), 0 18px 50px rgba(0,0,0,.35); animation: pop .16s cubic-bezier(.3,.8,.4,1.3); }
+.menu button { display: flex; align-items: center; gap: 10px; background: none; border: 0; border-radius: 12px; padding: 11px 12px; text-align: left; font-size: .9rem; color: var(--text); }
+.menu button:hover, .menu button:focus-visible { background: color-mix(in srgb, var(--accent) 14%, transparent); outline: none; }
+.menu button.on { background: color-mix(in srgb, var(--accent) 18%, transparent); }
+.menu b { margin-left: auto; color: var(--accent); }
+.menu-wrap.out .menu { animation: pop .14s ease reverse forwards; }
+@keyframes pop { from { opacity: 0; transform: scale(.92); } }
+@media (prefers-reduced-motion: reduce) { .menu { animation: none; } }
+
+/* ---------- tappable line cards ---------- */
+.card.pickable { cursor: pointer; touch-action: manipulation; -webkit-user-select: none; user-select: none; transition: transform .14s cubic-bezier(.3,.7,.4,1.4), box-shadow .2s, border-color .2s; }
+.card.pickable:active { transform: scale(.98); }
+@media (hover: hover) { .card.pickable:hover { border-color: color-mix(in srgb, var(--accent) 55%, transparent); } }
+.card.pickable:focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
+.cta { display: block; text-align: center; font-weight: 600; border-radius: 12px; position: relative; overflow: hidden; color: #fff;
+  background: linear-gradient(180deg, color-mix(in srgb, var(--accent) 88%, #fff), var(--accent)); box-shadow: 0 6px 16px -6px var(--accent); }
+.cta::before { content: ""; position: absolute; inset: 0 0 50% 0; background: linear-gradient(180deg, rgba(255,255,255,.28), transparent); pointer-events: none; }
+.card:not(.best) .cta { background: var(--glass-strong); color: var(--text); border: 1px solid var(--glass-line); box-shadow: inset 0 1px 0 var(--glass-edge); }
+.card:not(.best) .cta::before { display: none; }
+.card.pickable:active .cta { filter: brightness(.92); }
+.cta { margin-top: 14px; padding: 14px; font-size: 1rem; }
+@media (max-width: 759px) { .cta { margin-top: 10px; padding: 11px; font-size: .92rem; } }
+
+/* ---------- selectable line cards ---------- */
+.card.pickable .rank { background: var(--card-2); color: var(--muted); border-color: var(--line); }
+.card.pickable.rec .rank { background: var(--accent); color: #fff; border-color: var(--accent); }
+.card.pickable:not(.best) { opacity: .82; }
+.card.pickable:not(.best):active { opacity: 1; }
+button.cta { width: 100%; border: 0; }
+.cta.ghosted { background: transparent !important; box-shadow: none !important; border: 1px dashed var(--glass-line) !important; color: var(--muted) !important; font-weight: 600; }

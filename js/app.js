@@ -18,6 +18,7 @@ try { S = JSON.parse(localStorage.getItem(KEY)); } catch { S = null; }
 if (!S) S = { roster: [], settings: { ...DEFAULT_SETTINGS }, game: newGame() };
 S.settings = { ...DEFAULT_SETTINGS, ...S.settings };
 let tab = 'game';
+let sel = 0; // which line option is highlighted (UI only)
 
 const save = () => { try { localStorage.setItem(KEY, JSON.stringify(S)); } catch {} };
 const byId = () => Object.fromEntries(S.roster.map(p => [p.id, p]));
@@ -51,6 +52,7 @@ function refreshOptions() {
 }
 
 function pick(i) {
+  sel = 0;
   const o = S.game.options[i];
   S.game.current = { mode: o.mode, assign: o.assign.map(a => ({ slot: a.slot, id: a.id })), label: o.label, option: i + 1, injuries: [] };
   save(); render(); toTop();
@@ -73,6 +75,7 @@ function scored(by) {
 }
 
 function undo() {
+  sel = 0;
   const g = S.game, pt = g.points.pop();
   if (!pt) return;
   if (pt.scoredBy === 'us') g.us--; else g.them--;
@@ -139,9 +142,10 @@ function gameView() {
     h += `<h2 class="title">Point ${g.points.length + 1}: pick a line</h2><p class="lede">You're on <b>${m === 'O' ? 'offense' : 'defense'}</b>. Option 1 is the recommended line.</p>`;
     h += '<div class="opts">';
     g.options.forEach((o, i) => {
-      h += `<div class="card ${i === 0 ? 'best' : ''} mode-${o.mode.toLowerCase()}"><h3><span>${esc(o.label)}</span> <span class="rank">${i === 0 ? '★ Best' : 'Option ' + (i + 1)}</span></h3>
+      const on = i === (sel < g.options.length ? sel : 0);
+      h += `<div class="card pickable ${on ? 'best' : ''} ${i === 0 ? 'rec' : ''} mode-${o.mode.toLowerCase()}" data-act="select" data-i="${i}" role="radio" aria-checked="${on}" tabindex="0" aria-label="${esc(o.label)}"><h3><span>${esc(o.label)}</span> <span class="rank">${i === 0 ? '★ Best' : 'Option ' + (i + 1)}</span></h3>
         <div class="slots">${slotRows(o.assign, o.dlo)}</div>
-        <button class="primary" data-act="pick" data-i="${i}">Send out this line</button></div>`;
+        ${on ? `<button class="cta" data-act="pick" data-i="${i}">Send out this line</button>` : `<div class="cta ghosted" aria-hidden="true">Tap to select</div>`}</div>`;
     });
     h += '</div>';
     if (!g.options.length) h += `<div class="card empty"><span class="ico">🙅</span>Not enough available players to field a line.<br>Check who's marked available on the Roster tab.</div>`;
@@ -172,8 +176,7 @@ function rosterView() {
   let h = `<h2 class="title">Roster</h2><p class="lede"><b>${avail}</b> of ${S.roster.length} available. Tap a player to edit. Status changes apply from the next point.</p>`;
   S.roster.forEach((p, i) => {
     h += `<details class="player status-${p.status}"><summary><span class="avatar" style="--h:${hue(p.name)}">${esc(initials(p.name))}</span><span class="nm"><span>${esc(p.name)}${p.rookie ? ' <span class="tag mini">Rookie</span>' : ''}</span><small>${esc(p.o ? 'O: ' + p.o : p.o2 ? 'O2: ' + p.o2 : p.o3 ? 'O3: ' + p.o3 : 'D: ' + (p.dlo || '—'))}</small></span>
-      <select data-act="status" data-i="${i}" onclick="event.stopPropagation()">
-        ${['available', 'injured', 'unavailable'].map(s => `<option ${p.status === s ? 'selected' : ''}>${s}</option>`).join('')}</select></summary><div class="body">
+      <button class="pill st-${p.status}" data-act="statusMenu" data-i="${i}" aria-haspopup="menu"><i></i>${STATUS_LABEL[p.status]}<svg viewBox="0 0 12 8" aria-hidden="true"><path d="M1 1l5 5 5-5"/></svg></button></summary><div class="body">
       <label class="f">Name<input type="text" data-act="field" data-i="${i}" data-k="name" value="${esc(p.name)}"></label>
       ${fields.map(([k, l]) => `<label class="f">${l}<input type="text" data-act="field" data-i="${i}" data-k="${k}" value="${esc(p[k])}"></label>`).join('')}
       <div class="grid2" style="margin-top:6px">
@@ -246,10 +249,37 @@ function download(filename, text, type = 'application/json') {
   setTimeout(() => URL.revokeObjectURL(a.href), 1000);
 }
 
+$('#view').addEventListener('keydown', e => {
+  const c = e.target.closest?.('[data-act="select"]');
+  if (c && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); c.click(); }
+});
 function toTop() { window.scrollTo({ top: 0, behavior: 'smooth' }); }
 const buzz = () => { try { navigator.vibrate?.(12); } catch {} };
 window.addEventListener('error', e => tell('Something went wrong', String(e.message || e.error)));
 window.addEventListener('unhandledrejection', e => tell('Something went wrong', String(e.reason?.message || e.reason)));
+
+const STATUS_LABEL = { available: 'Available', injured: 'Injured', unavailable: 'Out' };
+
+// ---------- glass popover menu (replaces native <select> where it shows) ----------
+function menu(anchor, items, current) {
+  return new Promise(resolve => {
+    const wrap = document.createElement('div');
+    wrap.className = 'menu-wrap';
+    wrap.innerHTML = `<div class="menu" role="menu">${items.map(([v, l]) =>
+      `<button role="menuitem" data-v="${v}" class="st-${v} ${v === current ? 'on' : ''}"><i></i>${esc(l)}${v === current ? '<b>✓</b>' : ''}</button>`).join('')}</div>`;
+    document.body.appendChild(wrap);
+    const m = wrap.firstChild, r = anchor.getBoundingClientRect(), mh = m.offsetHeight, mw = m.offsetWidth;
+    const below = r.bottom + 6 + mh < window.innerHeight - 90;
+    m.style.top = (below ? r.bottom + 6 : r.top - 6 - mh) + 'px';
+    m.style.left = Math.max(12, Math.min(r.right - mw, window.innerWidth - mw - 12)) + 'px';
+    m.style.transformOrigin = below ? 'top right' : 'bottom right';
+    const done = v => { wrap.classList.add('out'); setTimeout(() => wrap.remove(), 140); removeEventListener('keydown', key); resolve(v); };
+    const key = e => e.key === 'Escape' && done(null);
+    wrap.addEventListener('click', e => { const b = e.target.closest('[data-v]'); done(b ? b.dataset.v : null); });
+    addEventListener('keydown', key);
+    m.querySelector('.on, button')?.focus();
+  });
+}
 
 // ---------- in-app dialog (replaces native confirm/alert) ----------
 function ask(title, body = '', { ok = 'OK', cancel = 'Cancel', danger = false } = {}) {
@@ -278,10 +308,17 @@ document.querySelector('.tabs').addEventListener('click', e => {
 });
 
 $('#view').addEventListener('click', async e => {
-  const b = e.target.closest('button'); if (!b) return;
+  const b = e.target.closest('button, [data-act="select"]'); if (!b) return;
   buzz();
   const i = +b.dataset.i, g = S.game;
   switch (b.dataset.act) {
+    case 'select': if (sel !== i) { sel = i; render(); } return;
+    case 'statusMenu': {
+      e.preventDefault(); // don't toggle the <details>
+      const v = await menu(b, Object.entries(STATUS_LABEL), S.roster[i].status);
+      if (v && v !== S.roster[i].status) { S.roster[i].status = v; rosterChanged(); render(); }
+      return;
+    }
     case 'pick': return pick(i);
     case 'us': return scored('us');
     case 'them': return scored('them');
