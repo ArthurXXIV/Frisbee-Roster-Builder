@@ -55,7 +55,7 @@ export function normalizeRoster(data) {
   data.forEach((raw, i) => {
     if (!raw || typeof raw !== 'object' || !String(raw.name ?? '').trim()) { warnings.push(`Row ${i + 1}: no name, skipped`); return; }
     const pl = { ...PLAYER_DEFAULTS, ...raw, name: String(raw.name).trim() };
-    for (const f of SLOT_FIELDS) pl[f] = String(pl[f] ?? '').trim();
+    for (const f of SLOT_FIELDS) pl[f] = String(pl[f] ?? '').split(',').map(x => x.trim()).filter(x => x && x !== '-').join(', ');
     if (!PERSON_ROLES.includes(pl.pd)) { warnings.push(`${pl.name}: unknown person D role "${pl.pd}", set to none`); pl.pd = ''; }
     if (!STATUSES.includes(pl.status)) pl.status = 'available';
     pl.cross = [0, 1, 2].includes(+pl.cross) ? +pl.cross : 0;
@@ -105,3 +105,90 @@ export const DEFAULT_SETTINGS = {
   provisionalZone: 'Wing',
   provisionalPd: 'cutter',
 };
+
+// ---------- Excel import / export (roster ⇄ spreadsheet rows) ----------
+// Column headers match the coach's sheet ("O", "D-Line O", "Person D", "Zone D", "O2", "O3"),
+// plus app-only columns. Headers are matched case-insensitively; the first column with a blank header is the name.
+
+const PD_TO_SHEET = { best: 'Best Player', handler: 'Handler', cutter: 'Cutter', '': '' };
+const CROSS_TO_SHEET = { 0: '', 1: 'Primary', 2: 'Situational' };
+
+export const ROSTER_COLUMNS = [
+  { header: 'Name',         key: 'name',       aliases: ['player', ''] },
+  { header: 'O',            key: 'o',          aliases: ['o slots'] },
+  { header: 'O2',           key: 'o2',         aliases: ['o2 slots'] },
+  { header: 'O3',           key: 'o3',         aliases: ['o3 slots'] },
+  { header: 'D-Line O',     key: 'dlo',        aliases: ['dline o', 'd line o', 'dlo'] },
+  { header: 'Zone D',       key: 'zone',       aliases: ['zone'] },
+  { header: 'Person D',     key: 'pd',         aliases: ['person', 'pd'] },
+  { header: 'Rookie',       key: 'rookie',     aliases: [] },
+  { header: 'Crossover',    key: 'cross',      aliases: ['cross'] },
+  { header: 'Max in a row', key: 'maxConsec',  aliases: ['max consecutive', 'stamina'] },
+  { header: 'Status',       key: 'status',     aliases: [] },
+  { header: 'Notes',        key: 'notes',      aliases: [] },
+  { header: 'Provisional',  key: 'provisional',aliases: [] },
+];
+
+const norm = s => String(s ?? '').trim().toLowerCase().replace(/[\s_-]+/g, ' ');
+const yes = v => ['yes', 'y', 'true', '1', 'x', '✓'].includes(norm(v));
+
+function fromCell(key, v) {
+  const t = String(v ?? '').trim();
+  switch (key) {
+    case 'o': case 'o2': case 'o3': case 'dlo': case 'zone': return t === '-' ? '' : t;
+    case 'pd': { if (t === '-') return ''; const n = norm(t); return n.startsWith('best') ? 'best' : n.startsWith('hand') ? 'handler' : n.startsWith('cut') ? 'cutter' : n === '' || n === '-' ? '' : t; }
+    case 'rookie': case 'provisional': return yes(t);
+    case 'cross': { const n = norm(t); return n.startsWith('prim') || n === '1' ? 1 : n.startsWith('sit') || n === '2' ? 2 : 0; }
+    case 'maxConsec': return +t > 0 ? +t : null;
+    case 'status': return norm(t) || 'available';
+    default: return t;
+  }
+}
+
+/** Roster → rows for writeXlsx (header row first). Empty slots are written as "-", like the coach's sheet. */
+export function rosterToRows(roster) {
+  return [ROSTER_COLUMNS.map(c => c.header), ...roster.map(p => ROSTER_COLUMNS.map(({ key }) => {
+    const v = p[key];
+    if (['o', 'o2', 'o3', 'dlo', 'zone'].includes(key)) return v || '-';
+    if (key === 'pd') return PD_TO_SHEET[v || ''] ?? '';
+    if (key === 'cross') return CROSS_TO_SHEET[v || 0] ?? '';
+    if (key === 'rookie' || key === 'provisional') return v ? 'Yes' : '';
+    if (key === 'maxConsec') return v ? String(v) : '';
+    return v ?? '';
+  }))];
+}
+
+/**
+ * Spreadsheet rows → { roster, warnings }. Finds the header row (the first row containing an "O" or "Zone D" column).
+ * Columns missing from the sheet keep their value from `existing` (matched by name), so re-importing the coach's
+ * sheet doesn't wipe app-only fields like rookie or crossover.
+ */
+export function rowsToRoster(rows, existing = []) {
+  const hi = rows.findIndex(r => r.some(c => ['o', 'zone d', 'zone'].includes(norm(c))));
+  if (hi < 0) throw new Error('No header row found. The sheet needs columns like "O", "D-Line O", "Zone D".');
+  const header = rows[hi].map(norm), colOf = {};
+  for (const c of ROSTER_COLUMNS) {
+    const names = [norm(c.header), ...c.aliases];
+    const i = header.findIndex(h => names.includes(h) && (h !== '' || !Object.values(colOf).includes(header.indexOf(''))));
+    if (i >= 0 && !Object.values(colOf).includes(i)) colOf[c.key] = i;
+  }
+  if (colOf.name === undefined) colOf.name = 0;
+  const prev = Object.fromEntries(existing.map(p => [norm(p.name), p]));
+  const players = [];
+  for (const r of rows.slice(hi + 1)) {
+    const name = String(r[colOf.name] ?? '').trim();
+    if (!name) continue;
+    const old = prev[norm(name)];
+    const p = old ? { ...old } : {};
+    for (const [key, i] of Object.entries(colOf)) p[key] = fromCell(key, r[i]);
+    p.name = name;
+    players.push(p);
+  }
+  const res = normalizeRoster(players);
+  const missing = ROSTER_COLUMNS.filter(c => colOf[c.key] === undefined).map(c => c.header);
+  const optional = ['Status', 'Notes', 'Provisional', 'Max in a row'];
+  const important = missing.filter(h => !optional.includes(h));
+  const newNames = players.filter(p => !prev[norm(p.name)]).map(p => p.name);
+  if (important.length && newNames.length) res.warnings.unshift(`No ${important.join(' / ')} column. Set these in the Roster tab for: ${newNames.join(', ')}`);
+  return res;
+}

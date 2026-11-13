@@ -1,4 +1,5 @@
-import { DEFAULT_SETTINGS, O_SLOTS, ROLES, withIds, loadSampleRoster, normalizeRoster } from './roster.js';
+import { DEFAULT_SETTINGS, O_SLOTS, ROLES, withIds, loadSampleRoster, normalizeRoster, rosterToRows, rowsToRoster } from './roster.js';
+import { readXlsx, writeXlsx } from './xlsx.js';
 import { suggest, replacements, playerStats, flags, matchDLineO, parseSlots } from './optimizer.js';
 
 const KEY = 'roster-builder-v1';
@@ -185,7 +186,7 @@ function rosterView() {
   h += `<h2>Offensive roles</h2><div class="card slots legend">${O_SLOTS.map(s => `<div class="slot"><span class="badge o">${s}</span><span class="who">${esc(ROLES[s])}</span></div>`).join('')}</div>`;
   h += `<h2>Manage</h2>`;
   h += `<div class="row"><button data-act="add" class="primary" style="margin:0 0 4px">+ Add player</button>
-    <button data-act="exportRoster">Export JSON</button><button data-act="importRoster">Import JSON</button>
+    <button data-act="exportRoster">Export Excel</button><button data-act="importRoster">Import Excel</button>
     <button data-act="healAll">Mark all available</button><button class="danger" data-act="resetRoster">Reset to sheet</button></div>`;
   return h;
 }
@@ -388,12 +389,18 @@ $('#view').addEventListener('click', async e => {
     case 'del': if (await ask(`Remove ${S.roster[i].name}?`, 'They will be taken off the roster.', { ok: 'Remove', danger: true })) { S.roster.splice(i, 1); rosterChanged(); render(); } return;
     case 'healAll': S.roster.forEach(p => p.status = 'available'); rosterChanged(); return render();
     case 'resetRoster': if (await ask('Replace the roster?', 'Your current players will be replaced with the sample roster.', { ok: 'Replace', danger: true })) loadSampleRoster().then(r => { S.roster = r; rosterChanged(); render(); }).catch(err => tell('Could not load roster', err.message)); return;
-    case 'exportRoster': return download('roster.json', JSON.stringify(S.roster, null, 2));
+    case 'exportRoster': return download(`roster-${new Date().toISOString().slice(0, 10)}.xlsx`, writeXlsx(rosterToRows(S.roster)), 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     case 'importRoster': {
-      const inp = document.createElement('input'); inp.type = 'file'; inp.accept = '.json,application/json';
+      const inp = document.createElement('input'); inp.type = 'file'; inp.accept = '.xlsx,.json,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/json';
       inp.onchange = async () => {
-        try { const { roster, warnings } = normalizeRoster(JSON.parse(await inp.files[0].text())); S.roster = roster; rosterChanged(); render(); if (warnings.length) tell('Imported with notes', warnings.join('\n')); }
-        catch { tell('Could not import', 'That file is not a roster JSON export.'); }
+        const f = inp.files[0]; if (!f) return;
+        try {
+          const { roster, warnings } = /\.json$/i.test(f.name)
+            ? normalizeRoster(JSON.parse(await f.text()))            // old JSON backups still work
+            : rowsToRoster(await readXlsx(await f.arrayBuffer()), S.roster);
+          S.roster = roster; rosterChanged(); render();
+          if (warnings.length) tell('Imported with notes', warnings.join('\n'));
+        } catch (err) { tell('Could not import', err.message || 'That file is not a roster spreadsheet.'); }
       };
       return inp.click();
     }

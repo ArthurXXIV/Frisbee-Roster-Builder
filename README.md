@@ -8,7 +8,7 @@ Spec: [docs/plan.md](docs/plan.md) (v0.2.2) · Agent handoff: [AGENTS.md](AGENTS
 Open the GitHub Pages URL on a phone → Share → *Add to Home Screen*. Data is saved in that browser (localStorage); use **Export** on the Roster/Stats tabs to back up.
 
 ## Roster data
-The app ships with a demo roster (`data/sample-roster.json`). To use your own team, import a roster JSON on the Roster tab. Export a backup after each tournament, because data is saved only in that browser.
+The app ships with a demo roster (`data/sample-roster.json`). To use your own team, tap **Import Excel** on the Roster tab. It reads a sheet with columns like `O`, `O2`, `O3`, `D-Line O`, `Zone D` and `Person D`, the same layout as the coach's sheet. **Export Excel** gives you a full copy to edit and re-import. Export a backup after each tournament, because data is saved only in that browser.
 
 ## Run locally
 ```sh
