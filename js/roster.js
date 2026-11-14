@@ -36,9 +36,19 @@ export const SAMPLE_ROSTER_URL = 'data/sample-roster.json';
 
 /** Browser: fetches the fake sample roster (relative to index.html). Returns normalized Player[]. */
 export async function loadSampleRoster(url = SAMPLE_ROSTER_URL) {
+  return (await loadTeam(url)).roster;
+}
+
+/**
+ * Loads a team file. Either a bare Player[] or { name, settings, players } (settings = team rule overrides,
+ * e.g. Block's maxBench/interchange). Returns { name, settings, roster }.
+ */
+export async function loadTeam(url = SAMPLE_ROSTER_URL) {
   const res = await fetch(url);
-  if (!res.ok) throw new Error(`Could not load sample roster (${res.status})`);
-  return normalizeRoster(await res.json()).roster;
+  if (!res.ok) throw new Error(`Could not load roster (${res.status})`);
+  const data = await res.json();
+  const players = Array.isArray(data) ? data : data.players;
+  return { name: data.name || '', settings: (!Array.isArray(data) && data.settings) || {}, roster: normalizeRoster(players).roster };
 }
 
 const STATUSES = ['available', 'injured', 'unavailable'];
@@ -100,6 +110,9 @@ export const DEFAULT_SETTINGS = {
   maxConsecutive: 3,       // points in a row, everyone else (placeholder until coach confirms)
   maxConsecutiveBest: 5,   // points in a row, Best Players (pd === 'best')
   fatigueWeight: 1.5,
+  maxBench: 0,          // max points in a row on the sideline; 0 = off (Block team: 3)
+  interchange: false,   // O and D players swap freely (Block team: true)
+  minHandlers: 0,       // at least this many handlers (CH/PR/SR-eligible) on every line; 0 = off (Block team: 3)
   // Rookie quick-add starter slots (plan v0.3.1 §13)
   provisionalOffense: 'FC',
   provisionalZone: 'Wing',

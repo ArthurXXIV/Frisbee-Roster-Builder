@@ -23,8 +23,22 @@ export function playerStats(points) {
     for (let i = points.length - 1; i >= 0 && points[i].players.includes(id); i--) c++;
     consec[id] = c;
   }
-  return { total, consec };
+  // bench: points sat in a row, for players who have played; anyone never seen has sat all `n` points.
+  const bench = {};
+  for (const id of Object.keys(total)) {
+    let b = 0;
+    for (let i = points.length - 1; i >= 0 && !points[i].players.includes(id); i--) b++;
+    bench[id] = b;
+  }
+  return { total, consec, bench, n: points.length };
 }
+
+const HANDLER_SLOTS = ['CH', 'PR', 'SR'];
+/** A handler = can play CH, PR or SR in any offensive group (O, O2, O3 or D-Line O). */
+export const isHandler = p => ['o', 'o2', 'o3', 'dlo'].some(k => HANDLER_SLOTS.some(s => s in parseSlots(p[k])));
+
+/** Points a player has sat in a row (0 if they played the last point). */
+export const benchStreak = (id, stats) => stats.bench?.[id] ?? stats.n ?? 0;
 
 /** Breaks from the point log: our breaks = D points we scored; theirs = O points they scored. */
 export function gameStats(points) {
@@ -52,6 +66,13 @@ function fatigue(p, ctx) {
   const lim = maxConsecFor(p, s), r = (c * 3) / lim; // scaled so every player ramps up toward their own limit
   let x = s.fatigueWeight * r * r + 0.2 * t;
   if (c >= lim) x += 60; // over the limit: bottom of both options (still below an empty slot)
+  // Max on the sideline (team setting; 0 = off): the longer someone sits, the more they're pulled in,
+  // and anyone who has sat maxBench points in a row is effectively required next point.
+  if (s.maxBench > 0) {
+    const b = benchStreak(p.id, ctx.stats);
+    // steep ramp so players get in *before* the limit (a line only has room for 4 non-handlers)
+    x -= b >= s.maxBench ? 200 : b === s.maxBench - 1 ? 70 : b * 12;
+  }
   return x;
 }
 
@@ -71,15 +92,29 @@ function offenseEdges(ctx) {
         let c = null;
         if (slot in m) c = gcost[g] + (m[slot] && !lose ? 10 : 0);
         else if (HC_FALLBACK_SLOTS.includes(slot) && 'HC' in m) c = gcost[g] + 20; // emergency handler
+        // Teams with a handler minimum: any handler can cover another handler slot (e.g. one CH can't play every O point).
+        else if (ctx.settings.minHandlers > 0 && HANDLER_SLOTS.includes(slot) && HANDLER_SLOTS.some(h => h in m)) c = gcost[g] + 6;
         if (c !== null && (!best || c < best.cost)) best = { cost: c, group: g, fallback: !(slot in m) };
       }
       if (best) edges[slot].push({ id: p.id, cost: best.cost + base, group: best.group, fallback: best.fallback });
+    }
+  }
+  // Interchange (team setting): players with no offensive slots at all can play any O slot, tagged fromD.
+  if (ctx.settings.interchange) {
+    for (const p of available(ctx)) {
+      if (['o', 'o2', 'o3'].some(k => Object.keys(parseSlots(p[k])).length)) continue;
+      const base = fatigue(p, ctx) + (p.rookie && win ? -2 : 0);
+      for (const slot of O_SLOTS) {
+        if (ctx.settings.minHandlers > 0 && HANDLER_SLOTS.includes(slot)) continue; // handler slots need real handlers
+        edges[slot].push({ id: p.id, cost: gcost.o2 + 8 + base, group: 'd', fromD: true });
+      }
     }
   }
   // Fill-in: a slot nobody on the roster can play (e.g. a team with no HC) is filled by any offensive
   // player, tagged so the coach sees it. Still flagged as empty if there are no offensive players at all.
   for (const slot of O_SLOTS) {
     if (edges[slot].length) continue;
+    if (ctx.settings.minHandlers > 0 && HANDLER_SLOTS.includes(slot)) continue; // leave it flagged instead
     for (const p of available(ctx)) {
       const base = fatigue(p, ctx) + (p.rookie && win ? -2 : 0);
       const g = ['o', 'o2', 'o3'].filter(k => Object.keys(parseSlots(p[k])).length).sort((a, b) => gcost[a] - gcost[b])[0];
@@ -93,7 +128,7 @@ function offenseEdges(ctx) {
 function defenseBase(p, ctx) {
   const { win } = flags(ctx);
   let c = fatigue(p, ctx);
-  if (isOPlayer(p)) {
+  if (isOPlayer(p) && !ctx.settings.interchange) {
     const moment = ctx.halfPoint || ctx.gamePoint || ctx.bigGame;
     c += p.cross === 1 && moment ? 3 : p.cross === 2 && moment ? 6 : 30;
   } else if (p.rookie) c += win ? -2 : 3;
@@ -160,7 +195,7 @@ export function matchDLineO(ids, byId) {
  * Branch-and-bound min-cost assignment of `slots` (keys may repeat) to distinct players.
  * extra(id): added cost per player; leaf(ids): extra cost for a full lineup (Infinity = reject).
  */
-function solve(slots, edges, { extra = () => 0, leaf = () => 0, budget = 400000 } = {}) {
+function solve(slots, edges, { extra = () => 0, leaf = () => 0, budget = 60000 } = {}) {
   const order = slots.map((k, i) => ({ k, i })).sort((a, b) => edges[a.k].length - edges[b.k].length);
   const lists = order.map(o => edges[o.k].map(e => ({ ...e, cost: e.cost + extra(e.id) })).sort((a, b) => a.cost - b.cost));
   const minRest = new Array(order.length + 1).fill(0);
@@ -208,6 +243,8 @@ function lineupFor(ctx, extra) {
   const leaf = ids => {
     let c = hasDlo ? Object.values(matchDLineO(ids, byId)).filter(v => !v).length * 40 : 0;
     if (scheme === 'both') { const m = matchPerson(ids, byId); c += m.gaps * 40 + m.lastResort * 10; }
+    const minH = ctx.settings.minHandlers || 0;
+    if (minH > 0) c += Math.max(0, minH - ids.filter(id => isHandler(byId[id])).length) * 300; // outranks the sideline rule
     return c;
   };
   const r = scheme === 'person'

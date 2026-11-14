@@ -1,4 +1,4 @@
-import { DEFAULT_SETTINGS, O_SLOTS, ROLES, withIds, loadSampleRoster, normalizeRoster, rosterToRows, rowsToRoster } from './roster.js';
+import { DEFAULT_SETTINGS, O_SLOTS, ROLES, withIds, loadSampleRoster, loadTeam, normalizeRoster, rosterToRows, rowsToRoster } from './roster.js';
 import { readXlsx, writeXlsx } from './xlsx.js';
 import { suggest, replacements, playerStats, flags, matchDLineO, parseSlots } from './optimizer.js';
 
@@ -129,7 +129,7 @@ function scoreboard() {
 
 function slotRows(assign, dlo) {
   return assign.map(a => `<div class="slot"><span class="badge" title="${esc(ROLES[a.slot] || a.slot)}">${a.slot}</span>${a.id
-      ? `<span class="who">${esc(name(a.id))}${a.fallback ? ' <span class="tag warn mini">HC fallback</span>' : ''}${a.fillIn ? ' <span class="tag warn mini">fill-in</span>' : ''}</span>`
+      ? `<span class="who">${esc(name(a.id))}${a.fallback ? ' <span class="tag warn mini">HC fallback</span>' : ''}${a.fillIn ? ' <span class="tag warn mini">fill-in</span>' : ''}${a.fromD ? ' <span class="tag mini">from D</span>' : ''}</span>`
       : `<span class="who missing">No ${a.slot} available</span>`}</div>`).join('')
     + (dlo ? `<div class="divider">If we get the turn</div>` +
       O_SLOTS.map(s => `<div class="slot after"><span class="badge o">${s}</span><span class="who ${dlo[s] ? '' : 'missing'}">${dlo[s] ? esc(name(dlo[s])) : 'Gap'}</span></div>`).join('') : '');
@@ -434,6 +434,11 @@ $('#view').addEventListener('change', e => {
 async function boot() {
   if (!S.roster?.length) {
     try { S.roster = await loadSampleRoster(ROSTER_URL); save(); }
+    catch (err) { console.error(err); }
+  }
+  // Team links: the team file's rules (e.g. Block: max 3 on the sideline, O/D interchange, 3 handlers) always apply.
+  if (TEAM) {
+    try { const t = await loadTeam(ROSTER_URL); S.settings = { ...S.settings, ...t.settings }; save(); }
     catch (err) { console.error(err); }
   }
   S.game.options = null; refreshOptions(); render();
