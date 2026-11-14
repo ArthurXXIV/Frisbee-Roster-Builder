@@ -176,6 +176,8 @@ export function rowsToRoster(rows, existing = []) {
   const prev = Object.fromEntries(existing.map(p => [norm(p.name), p]));
   const players = [];
   for (const r of rows.slice(hi + 1)) {
+    // A second table on the same sheet (its own header row: blank name cell + "O" + "Zone D" columns): stop.
+    if (!String(r[colOf.name] ?? '').trim() && r.some(c => norm(c) === 'o') && r.some(c => ['zone d', 'zone'].includes(norm(c)))) break;
     const name = String(r[colOf.name] ?? '').trim();
     if (!name) continue;
     const old = prev[norm(name)];

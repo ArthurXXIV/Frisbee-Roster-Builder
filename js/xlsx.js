@@ -81,23 +81,40 @@ const textOf = xml => [...xml.matchAll(/<t(?:\s[^>]*)?>([\s\S]*?)<\/t>/g)].map(m
 const colIndex = ref => { let n = 0; for (const ch of ref.replace(/\d+/g, '')) n = n * 26 + (ch.charCodeAt(0) - 64); return n - 1; };
 const colName = i => { let s = ''; i++; while (i) { const r = (i - 1) % 26; s = String.fromCharCode(65 + r) + s; i = Math.floor((i - 1) / 26); } return s; };
 
-/** Reads the first worksheet of an .xlsx file → string[][] (rows of cell text; empty cells are ''). */
-export async function readXlsx(buf) {
-  const get = await unzip(buf);
-  let sheetPath = 'xl/worksheets/sheet1.xml';
+async function sheetPaths(get) {
   const wb = await get('xl/workbook.xml'), rels = await get('xl/_rels/workbook.xml.rels');
-  const rid = wb && (wb.match(/<sheet\b[^>]*\br:id="([^"]+)"/) || [])[1];
-  if (rid && rels) {
-    const rel = [...rels.matchAll(/<Relationship\b[^>]*>/g)].map(m => m[0]).find(r => r.includes(`Id="${rid}"`));
-    const target = rel && (rel.match(/Target="([^"]+)"/) || [])[1];
-    if (target) sheetPath = target.startsWith('/') ? target.slice(1) : 'xl/' + target.replace(/^\.\//, '');
+  const relTargets = {};
+  for (const m of (rels || '').matchAll(/<Relationship\b[^>]*>/g)) {
+    const id = (m[0].match(/\bId="([^"]+)"/) || [])[1], t = (m[0].match(/\bTarget="([^"]+)"/) || [])[1];
+    if (id && t) relTargets[id] = t.startsWith('/') ? t.slice(1) : 'xl/' + t.replace(/^\.\//, '');
   }
-  const sheet = await get(sheetPath);
-  if (!sheet) throw new Error('The .xlsx file has no worksheet');
+  return [...(wb || '').matchAll(/<sheet\b[^>]*>/g)].map(m => ({
+    name: unesc((m[0].match(/\bname="([^"]*)"/) || [])[1] || ''),
+    path: relTargets[(m[0].match(/\br:id="([^"]+)"/) || [])[1]],
+  })).filter(x => x.path);
+}
+
+/** Sheet names in workbook order. */
+export async function listSheets(buf) {
+  return (await sheetPaths(await unzip(buf))).map(s => s.name);
+}
+
+/**
+ * Reads one worksheet → string[][] (rows of cell text; empty cells are '').
+ * `sheet`: a sheet name or 0-based index (default: the first sheet).
+ */
+export async function readXlsx(buf, { sheet = 0 } = {}) {
+  const get = await unzip(buf);
+  const sheets = await sheetPaths(get);
+  const pick = typeof sheet === 'number' ? sheets[sheet] : sheets.find(x => x.name.trim().toLowerCase() === String(sheet).trim().toLowerCase());
+  if (sheets.length && !pick) throw new Error(`No sheet "${sheet}" in this file. Sheets: ${sheets.map(x => x.name).join(', ')}`);
+  const sheetPath = pick ? pick.path : 'xl/worksheets/sheet1.xml';
+  const sheetXml = await get(sheetPath);
+  if (!sheetXml) throw new Error("The .xlsx file has no worksheet");
   const ssXml = await get('xl/sharedStrings.xml');
   const shared = ssXml ? [...ssXml.matchAll(/<si>([\s\S]*?)<\/si>/g)].map(m => textOf(m[1])) : [];
   const rows = [];
-  for (const rm of sheet.matchAll(/<row\b([^>]*?)(?:\/>|>([\s\S]*?)<\/row>)/g)) {
+  for (const rm of sheetXml.matchAll(/<row\b([^>]*?)(?:\/>|>([\s\S]*?)<\/row>)/g)) {
     const rNum = +((rm[1].match(/\br="(\d+)"/) || [])[1] || rows.length + 1);
     const row = [];
     let next = 0;

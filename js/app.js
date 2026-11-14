@@ -2,7 +2,11 @@ import { DEFAULT_SETTINGS, O_SLOTS, ROLES, withIds, loadSampleRoster, normalizeR
 import { readXlsx, writeXlsx } from './xlsx.js';
 import { suggest, replacements, playerStats, flags, matchDLineO, parseSlots } from './optimizer.js';
 
-const KEY = 'roster-builder-v1';
+// Team links: ?team=block loads data/block-roster.json and keeps its own saved data (separate from the default team).
+const TEAM = (new URLSearchParams(location.search).get('team') || '').toLowerCase().replace(/[^a-z0-9-]/g, '');
+const KEY = 'roster-builder-v1' + (TEAM ? ':' + TEAM : '');
+const ROSTER_URL = TEAM ? `data/${TEAM}-roster.json` : undefined;
+if (TEAM) document.title = `Roster Builder · ${TEAM[0].toUpperCase() + TEAM.slice(1)}`;
 const $ = sel => document.querySelector(sel);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const first = n => n.split(' ')[0];
@@ -125,7 +129,7 @@ function scoreboard() {
 
 function slotRows(assign, dlo) {
   return assign.map(a => `<div class="slot"><span class="badge" title="${esc(ROLES[a.slot] || a.slot)}">${a.slot}</span>${a.id
-      ? `<span class="who">${esc(name(a.id))}${a.fallback ? ' <span class="tag warn mini">HC fallback</span>' : ''}</span>`
+      ? `<span class="who">${esc(name(a.id))}${a.fallback ? ' <span class="tag warn mini">HC fallback</span>' : ''}${a.fillIn ? ' <span class="tag warn mini">fill-in</span>' : ''}</span>`
       : `<span class="who missing">No ${a.slot} available</span>`}</div>`).join('')
     + (dlo ? `<div class="divider">If we get the turn</div>` +
       O_SLOTS.map(s => `<div class="slot after"><span class="badge o">${s}</span><span class="who ${dlo[s] ? '' : 'missing'}">${dlo[s] ? esc(name(dlo[s])) : 'Gap'}</span></div>`).join('') : '');
@@ -388,7 +392,7 @@ $('#view').addEventListener('click', async e => {
     case 'add': S.roster.push({ ...withIds([{ name: 'New Player' }])[0], id: 'p' + Date.now(), o: '', o2: '', o3: '', dlo: '', zone: '', rookie: false, cross: 0, status: 'available', notes: '' }); rosterChanged(); return render();
     case 'del': if (await ask(`Remove ${S.roster[i].name}?`, 'They will be taken off the roster.', { ok: 'Remove', danger: true })) { S.roster.splice(i, 1); rosterChanged(); render(); } return;
     case 'healAll': S.roster.forEach(p => p.status = 'available'); rosterChanged(); return render();
-    case 'resetRoster': if (await ask('Replace the roster?', 'Your current players will be replaced with the sample roster.', { ok: 'Replace', danger: true })) loadSampleRoster().then(r => { S.roster = r; rosterChanged(); render(); }).catch(err => tell('Could not load roster', err.message)); return;
+    case 'resetRoster': if (await ask('Replace the roster?', 'Your current players will be replaced with the sample roster.', { ok: 'Replace', danger: true })) loadSampleRoster(ROSTER_URL).then(r => { S.roster = r; rosterChanged(); render(); }).catch(err => tell('Could not load roster', err.message)); return;
     case 'exportRoster': return download(`roster-${new Date().toISOString().slice(0, 10)}.xlsx`, writeXlsx(rosterToRows(S.roster)), 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     case 'importRoster': {
       const inp = document.createElement('input'); inp.type = 'file'; inp.accept = '.xlsx,.json,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/json';
@@ -429,7 +433,7 @@ $('#view').addEventListener('change', e => {
 
 async function boot() {
   if (!S.roster?.length) {
-    try { S.roster = await loadSampleRoster(); save(); }
+    try { S.roster = await loadSampleRoster(ROSTER_URL); save(); }
     catch (err) { console.error(err); }
   }
   S.game.options = null; refreshOptions(); render();

@@ -76,6 +76,16 @@ function offenseEdges(ctx) {
       if (best) edges[slot].push({ id: p.id, cost: best.cost + base, group: best.group, fallback: best.fallback });
     }
   }
+  // Fill-in: a slot nobody on the roster can play (e.g. a team with no HC) is filled by any offensive
+  // player, tagged so the coach sees it. Still flagged as empty if there are no offensive players at all.
+  for (const slot of O_SLOTS) {
+    if (edges[slot].length) continue;
+    for (const p of available(ctx)) {
+      const base = fatigue(p, ctx) + (p.rookie && win ? -2 : 0);
+      const g = ['o', 'o2', 'o3'].filter(k => Object.keys(parseSlots(p[k])).length).sort((a, b) => gcost[a] - gcost[b])[0];
+      if (g) edges[slot].push({ id: p.id, cost: gcost[g] + 30 + base, group: g, fillIn: true });
+    }
+  }
   return edges;
 }
 
@@ -192,8 +202,11 @@ function lineupFor(ctx, extra) {
     return r && { mode: 'O', assign: r.assign, players: r.assign.map(a => a.id).filter(Boolean), cost: r.cost };
   }
   const scheme = ctx.dScheme || 'zone';
+  // Rosters without any D-Line O data (e.g. a sheet with that column blank) skip the after-turn check,
+  // otherwise O players would be dragged onto D just to cover it.
+  const hasDlo = ctx.roster.some(p => Object.keys(parseSlots(p.dlo)).length);
   const leaf = ids => {
-    let c = Object.values(matchDLineO(ids, byId)).filter(v => !v).length * 40;
+    let c = hasDlo ? Object.values(matchDLineO(ids, byId)).filter(v => !v).length * 40 : 0;
     if (scheme === 'both') { const m = matchPerson(ids, byId); c += m.gaps * 40 + m.lastResort * 10; }
     return c;
   };
