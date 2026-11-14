@@ -49,7 +49,7 @@ export async function loadTeam(url = SAMPLE_ROSTER_URL) {
   if (!res.ok) throw new Error(`Could not load roster (${res.status})`);
   const data = await res.json();
   const players = Array.isArray(data) ? data : data.players;
-  return { name: data.name || '', settings: (!Array.isArray(data) && data.settings) || {}, roster: normalizeRoster(players).roster };
+  return { name: data.name || '', version: data.version || '', settings: (!Array.isArray(data) && data.settings) || {}, roster: normalizeRoster(players).roster };
 }
 
 const STATUSES = ['available', 'injured', 'unavailable'];

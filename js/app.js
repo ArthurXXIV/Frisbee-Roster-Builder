@@ -438,8 +438,18 @@ async function boot() {
   }
   // Team links: the team file's rules (e.g. Block: max 3 on the sideline, O/D interchange, 3 handlers) always apply.
   if (TEAM) {
-    try { const t = await loadTeam(ROSTER_URL); S.settings = { ...S.settings, ...t.settings }; save(); }
-    catch (err) { console.error(err); }
+    try {
+      const t = await loadTeam(ROSTER_URL);
+      S.settings = { ...S.settings, ...t.settings };
+      // Newer team file than the saved roster → refresh it, keeping each player's injured/unavailable status.
+      if (t.version && t.version !== S.teamVersion) {
+        const status = Object.fromEntries((S.roster || []).map(p => [p.name.trim().toLowerCase(), p.status]));
+        S.roster = t.roster.map(p => ({ ...p, status: status[p.name.trim().toLowerCase()] || p.status }));
+        S.teamVersion = t.version;
+        if (S.game) S.game.options = null; // re-suggest; a line already on the field is kept (ids are stable)
+      }
+      save();
+    } catch (err) { console.error(err); }
   }
   S.game.options = null; refreshOptions(); render();
 }
