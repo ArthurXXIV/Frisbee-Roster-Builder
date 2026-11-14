@@ -155,7 +155,7 @@
       "o": "PR",
       "o2": "",
       "o3": "",
-      "dlo": "",
+      "dlo": "PR",
       "zone": "Deep, Wing",
       "pd": "",
       "rookie": false,
@@ -171,7 +171,7 @@
       "o": "SR",
       "o2": "",
       "o3": "",
-      "dlo": "",
+      "dlo": "SR",
       "zone": "Wall, Sheep, Wing",
       "pd": "",
       "rookie": false,
@@ -196,7 +196,8 @@
       "status": "available",
       "notes": "",
       "provisional": false,
-      "id": "p11_tristan"
+      "id": "p11_tristan",
+      "dOnly": true
     },
     {
       "name": "Clark",
@@ -212,7 +213,8 @@
       "status": "available",
       "notes": "",
       "provisional": false,
-      "id": "p12_clark"
+      "id": "p12_clark",
+      "dOnly": true
     },
     {
       "name": "Harry",
@@ -228,7 +230,8 @@
       "status": "available",
       "notes": "",
       "provisional": false,
-      "id": "p13_harry"
+      "id": "p13_harry",
+      "dOnly": true
     },
     {
       "name": "Kai",
@@ -315,7 +318,7 @@
       "o": "CH",
       "o2": "",
       "o3": "",
-      "dlo": "",
+      "dlo": "CH",
       "zone": "Mark, Sheep, Wall, Deep",
       "pd": "",
       "rookie": false,

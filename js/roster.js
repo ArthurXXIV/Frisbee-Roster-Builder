@@ -27,6 +27,7 @@ export const PERSON_ROLES = ['best', 'handler', 'cutter', '']; // '' = none list
 export const PLAYER_DEFAULTS = {
   name: '', o: '', o2: '', o3: '', dlo: '', zone: '', pd: '',
   rookie: false, cross: 0, maxConsec: null, status: 'available', notes: '', provisional: false,
+  dOnly: false, // never on an O line, even when the team has O/D interchange
 };
 
 /** @deprecated Empty since v0.3.1. Use loadSampleRoster() or an imported roster. Kept so old imports don't crash. */
@@ -70,7 +71,7 @@ export function normalizeRoster(data) {
     if (!STATUSES.includes(pl.status)) pl.status = 'available';
     pl.cross = [0, 1, 2].includes(+pl.cross) ? +pl.cross : 0;
     pl.maxConsec = +pl.maxConsec > 0 ? +pl.maxConsec : null;
-    pl.rookie = !!pl.rookie; pl.provisional = !!pl.provisional;
+    pl.rookie = !!pl.rookie; pl.provisional = !!pl.provisional; pl.dOnly = !!pl.dOnly;
     if (!SLOT_FIELDS.some(f => pl[f])) warnings.push(`${pl.name}: no slots in any group, the optimizer will never pick them`);
     roster.push(pl);
   });
@@ -140,6 +141,7 @@ export const ROSTER_COLUMNS = [
   { header: 'Status',       key: 'status',     aliases: [] },
   { header: 'Notes',        key: 'notes',      aliases: [] },
   { header: 'Provisional',  key: 'provisional',aliases: [] },
+  { header: 'D only',       key: 'dOnly',      aliases: ['defense only', 'd-only'] },
 ];
 
 const norm = s => String(s ?? '').trim().toLowerCase().replace(/[\s_-]+/g, ' ');
@@ -150,7 +152,7 @@ function fromCell(key, v) {
   switch (key) {
     case 'o': case 'o2': case 'o3': case 'dlo': case 'zone': return t === '-' ? '' : t;
     case 'pd': { if (t === '-') return ''; const n = norm(t); return n.startsWith('best') ? 'best' : n.startsWith('hand') ? 'handler' : n.startsWith('cut') ? 'cutter' : n === '' || n === '-' ? '' : t; }
-    case 'rookie': case 'provisional': return yes(t);
+    case 'rookie': case 'provisional': case 'dOnly': return yes(t);
     case 'cross': { const n = norm(t); return n.startsWith('prim') || n === '1' ? 1 : n.startsWith('sit') || n === '2' ? 2 : 0; }
     case 'maxConsec': return +t > 0 ? +t : null;
     case 'status': return norm(t) || 'available';
@@ -165,7 +167,7 @@ export function rosterToRows(roster) {
     if (['o', 'o2', 'o3', 'dlo', 'zone'].includes(key)) return v || '-';
     if (key === 'pd') return PD_TO_SHEET[v || ''] ?? '';
     if (key === 'cross') return CROSS_TO_SHEET[v || 0] ?? '';
-    if (key === 'rookie' || key === 'provisional') return v ? 'Yes' : '';
+    if (key === 'rookie' || key === 'provisional' || key === 'dOnly') return v ? 'Yes' : '';
     if (key === 'maxConsec') return v ? String(v) : '';
     return v ?? '';
   }))];
@@ -201,7 +203,7 @@ export function rowsToRoster(rows, existing = []) {
   }
   const res = normalizeRoster(players);
   const missing = ROSTER_COLUMNS.filter(c => colOf[c.key] === undefined).map(c => c.header);
-  const optional = ['Status', 'Notes', 'Provisional', 'Max in a row'];
+  const optional = ['Status', 'Notes', 'Provisional', 'Max in a row', 'D only'];
   const important = missing.filter(h => !optional.includes(h));
   const newNames = players.filter(p => !prev[norm(p.name)]).map(p => p.name);
   if (important.length && newNames.length) res.warnings.unshift(`No ${important.join(' / ')} column. Set these in the Roster tab for: ${newNames.join(', ')}`);

@@ -72,7 +72,7 @@ function scored(by) {
     n: g.points.length + 1, mode: c.mode, players, assign: c.assign, label: c.label, option: c.option,
     injuries: c.injuries, scoredBy: by, us: g.us, them: g.them, ts: new Date().toISOString(),
   };
-  if (c.mode === 'D') pt.dlo = matchDLineO(players, byId());
+  if (c.mode === "D") pt.dlo = matchDLineO(players, byId(), { useOSlots: !!S.settings.interchange });
   if (!halftimeHappened(g) && Math.max(g.us, g.them) === halfAt(g)) pt.halftimeAfter = true;
   g.points.push(pt);
   g.current = null;

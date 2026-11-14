@@ -3,13 +3,19 @@ import { O_SLOTS, ZONE_SLOTS, PERSON_SLOTS, HC_FALLBACK_SLOTS } from './roster.j
 const MISSING = 1000; // cost of leaving a slot empty (flagged to coach)
 
 /** "IC, SC, Sheep?" -> { IC:false, SC:false, Sheep:true }  (value = last resort) */
+const slotCache = new Map();
 export function parseSlots(str) {
-  const out = {};
-  (str || '').split(',').map(s => s.trim()).filter(s => s && s !== '-').forEach(s => {
-    const lr = s.endsWith('?');
-    out[s.replace(/\?/g, '').trim()] = lr;
-  });
-  return out;
+  const key = str || '';
+  let out = slotCache.get(key);
+  if (!out) {
+    out = {};
+    key.split(',').map(s => s.trim()).filter(s => s && s !== '-').forEach(s => {
+      out[s.replace(/\?/g, '').trim()] = s.endsWith('?');
+    });
+    if (slotCache.size > 5000) slotCache.clear();
+    slotCache.set(key, out);
+  }
+  return out; // shared and cached: callers must not mutate it
 }
 
 export const isOPlayer = p => Object.keys(parseSlots(p.o)).length > 0;
@@ -35,7 +41,7 @@ export function playerStats(points) {
 
 const HANDLER_SLOTS = ['CH', 'PR', 'SR'];
 /** A handler = can play CH, PR or SR in any offensive group (O, O2, O3 or D-Line O). */
-export const isHandler = p => ['o', 'o2', 'o3', 'dlo'].some(k => HANDLER_SLOTS.some(s => s in parseSlots(p[k])));
+export const isHandler = p => ['o', 'o2', 'o3', 'dlo'].some(k => { const m = parseSlots(p[k]); return HANDLER_SLOTS.some(s => s in m); });
 
 /** Points a player has sat in a row (0 if they played the last point). */
 export const benchStreak = (id, stats) => stats.bench?.[id] ?? stats.n ?? 0;
@@ -69,7 +75,8 @@ function fatigue(p, ctx) {
   // Max on the sideline (team setting; 0 = off): the longer someone sits, the more they're pulled in,
   // and anyone who has sat maxBench points in a row is effectively required next point.
   if (s.maxBench > 0) {
-    const b = benchStreak(p.id, ctx.stats);
+    // D-only players can't play O points, so on a D point treat them as having sat one extra point
+    const b = benchStreak(p.id, ctx.stats) + (p.dOnly && ctx.mode === 'D' ? 1 : 0);
     // steep ramp so players get in *before* the limit (a line only has room for 4 non-handlers)
     x -= b >= s.maxBench ? 200 : b === s.maxBench - 1 ? 70 : b * 12;
   }
@@ -102,7 +109,7 @@ function offenseEdges(ctx) {
   // Interchange (team setting): players with no offensive slots at all can play any O slot, tagged fromD.
   if (ctx.settings.interchange) {
     for (const p of available(ctx)) {
-      if (['o', 'o2', 'o3'].some(k => Object.keys(parseSlots(p[k])).length)) continue;
+      if (p.dOnly || ['o', 'o2', 'o3'].some(k => Object.keys(parseSlots(p[k])).length)) continue;
       const base = fatigue(p, ctx) + (p.rookie && win ? -2 : 0);
       for (const slot of O_SLOTS) {
         if (ctx.settings.minHandlers > 0 && HANDLER_SLOTS.includes(slot)) continue; // handler slots need real handlers
@@ -173,9 +180,17 @@ export function matchPerson(ids, byId) {
   return { HD, CD, gaps: (3 - HD.length) + (4 - CD.length), lastResort: none.filter(id => HD.includes(id) || CD.includes(id)).length };
 }
 
-/** Max matching of players -> D-Line O slots (Kuhn's algorithm). Returns {slot:id}. */
-export function matchDLineO(ids, byId) {
-  const elig = ids.map(id => parseSlots(byId[id].dlo));
+/**
+ * Max matching of players -> D-Line O slots (Kuhn's algorithm). Returns {slot:id}.
+ * `useOSlots` (interchange teams): a player with a blank D-Line O uses their O/O2/O3 slots instead.
+ */
+export function matchDLineO(ids, byId, { useOSlots = false } = {}) {
+  const slotsOf = p => {
+    const d = parseSlots(p.dlo);
+    if (!useOSlots || Object.keys(d).length) return d;
+    return Object.assign({}, parseSlots(p.o3), parseSlots(p.o2), parseSlots(p.o));
+  };
+  const elig = ids.map(id => slotsOf(byId[id]));
   const slotOwner = {};
   const tryAssign = (i, seen) => {
     for (const s of O_SLOTS) {
@@ -240,8 +255,10 @@ function lineupFor(ctx, extra) {
   // Rosters without any D-Line O data (e.g. a sheet with that column blank) skip the after-turn check,
   // otherwise O players would be dragged onto D just to cover it.
   const hasDlo = ctx.roster.some(p => Object.keys(parseSlots(p.dlo)).length);
+  const dloOpts = { useOSlots: !!ctx.settings.interchange };
   const leaf = ids => {
-    let c = hasDlo ? Object.values(matchDLineO(ids, byId)).filter(v => !v).length * 40 : 0;
+    // Interchange teams rely on minHandlers for after-turn coverage; the D-Line O match is only displayed.
+    let c = hasDlo && !ctx.settings.interchange ? Object.values(matchDLineO(ids, byId, dloOpts)).filter(v => !v).length * 40 : 0;
     if (scheme === 'both') { const m = matchPerson(ids, byId); c += m.gaps * 40 + m.lastResort * 10; }
     const minH = ctx.settings.minHandlers || 0;
     if (minH > 0) c += Math.max(0, minH - ids.filter(id => isHandler(byId[id])).length) * 300; // outranks the sideline rule
@@ -252,7 +269,7 @@ function lineupFor(ctx, extra) {
     : solve(ZONE_SLOTS, defenseEdges(ctx), { extra, leaf });
   if (!r) return null;
   const players = r.assign.map(a => a.id).filter(Boolean);
-  const out = { mode: 'D', scheme, assign: r.assign, players, dlo: matchDLineO(players, byId), cost: r.cost };
+  const out = { mode: 'D', scheme, assign: r.assign, players, dlo: matchDLineO(players, byId, dloOpts), cost: r.cost };
   if (scheme === 'both') out.person = matchPerson(players, byId);
   return out;
 }
@@ -265,6 +282,10 @@ function label(lu, ctx, base) {
     const out = base.players.filter(id => !lu.players.includes(id)).map(id => first(byId[id].name));
     const inn = lu.players.filter(id => !base.players.includes(id)).map(id => first(byId[id].name));
     return out.length ? `Rest ${out.join(', ')} · in ${inn.join(', ')}` : 'Same line';
+  }
+  if (ctx.settings.interchange) { // no fixed O/D lines: describe by handler count
+    const h = lu.players.filter(id => isHandler(byId[id])).length;
+    return `${lu.mode === 'O' ? 'O' : 'D'} line · ${h} handlers`;
   }
   if (lu.mode === 'O') {
     const g = lu.assign.map(a => a.group);
